@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.4.1</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.devknow</groupId>
+    <artifactId>devknow</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>devknow</name>
+    <description>研发知识智能体平台 —— 把开源项目的文档与 issue 变成可检索、可被 Agent 调用的知识库</description>
+
+    <!--
+      模块划分遵循"领域限界上下文"：
+        common     通用能力（无业务依赖）
+        domain     实体与持久化（被所有业务模块依赖）
+        ingestion  模块1：数据接入流水线
+        retrieval  模块2：混合检索（第3周填充）
+        agent      模块3：Agent 运行时（第5周填充）
+        web        启动模块：Controller + 配置（唯一可执行模块）
+      依赖方向：web -> {ingestion, retrieval, agent} -> domain -> common
+    -->
+    <modules>
+        <module>devknow-common</module>
+        <module>devknow-domain</module>
+        <module>devknow-ingestion</module>
+        <module>devknow-retrieval</module>
+        <module>devknow-agent</module>
+        <module>devknow-web</module>
+    </modules>
+
+    <properties>
+        <java.version>21</java.version>
+        <maven.compiler.release>21</maven.compiler.release>
+        <!--
+          显式锁定 UTF-8。项目源码、SQL 注释、API 返回文案都含中文，
+          依赖平台默认编码会在 Windows（GBK 控制台）上产生乱码，
+          且这类问题往往到接口联调时才被发现。
+        -->
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <!-- 第三方版本统一在此管理，升级只需改一处 -->
+        <mybatis-plus.version>3.5.9</mybatis-plus.version>
+        <jgit.version>6.10.0.202406032230-r</jgit.version>
+        <!-- 解压 GitHub tarball 用（git 克隆在国内网络下的回退方案） -->
+        <commons-compress.version>1.27.1</commons-compress.version>
+        <!--
+          Lombok 版本覆盖 Spring Boot 的默认值。
+          Lombok 需要 hook javac 内部 API，JDK 每个大版本都可能需要新版 Lombok 配合，
+          这里显式锁定最新 1.18.x，避免"依赖一个能编译但注解不生效的版本"这类隐蔽问题。
+        -->
+        <lombok.version>1.18.42</lombok.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- 本项目各模块 -->
+            <dependency>
+                <groupId>com.devknow</groupId>
+                <artifactId>devknow-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.devknow</groupId>
+                <artifactId>devknow-domain</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.devknow</groupId>
+                <artifactId>devknow-ingestion</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.devknow</groupId>
+                <artifactId>devknow-retrieval</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.devknow</groupId>
+                <artifactId>devknow-agent</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <!-- MyBatis-Plus：注意 Spring Boot 3 必须用 spring-boot3-starter -->
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+                <version>${mybatis-plus.version}</version>
+            </dependency>
+
+            <!-- JGit：以编程方式浅克隆仓库、读取 commit hash -->
+            <dependency>
+                <groupId>org.eclipse.jgit</groupId>
+                <artifactId>org.eclipse.jgit</artifactId>
+                <version>${jgit.version}</version>
+            </dependency>
+
+            <!-- 解压 tar.gz：git 克隆不可达时改用 GitHub tarball 下载 -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-compress</artifactId>
+                <version>${commons-compress.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- 所有模块共用：Lombok 与测试 -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <configuration>
+                        <release>${maven.compiler.release}</release>
+                        <parameters>true</parameters>
+                        <proc>full</proc>
+                        <!--
+                          显式声明注解处理器路径。
+                          不能只依赖"classpath 上自动发现"：在多模块 + 大量依赖的场景下，
+                          Lombok 是否被当作处理器加载与 jar 在 classpath 中的位置有关，
+                          显式声明才能保证每个模块行为一致。
+                        -->
+                        <annotationProcessorPaths>
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                                <version>${lombok.version}</version>
+                            </path>
+                        </annotationProcessorPaths>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.devknow</groupId>
+        <artifactId>devknow</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>devknow-agent</artifactId>
+    <name>devknow-agent</name>
+    <description>模块3 · Agent 运行时：ReAct 循环、工具调用、SSE 流式、会话持久化（第5-6周填充）</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.devknow</groupId>
+            <artifactId>devknow-retrieval</artifactId>
+        </dependency>
+    </dependencies>
+</project>

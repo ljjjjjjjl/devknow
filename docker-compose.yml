@@ -1,0 +1,43 @@
+services:
+  postgres:
+    # 直接用 pgvector 镜像：第1周用不到向量，但省得第2周重装数据库
+    image: pgvector/pgvector:pg16
+    container_name: devknow-postgres
+    environment:
+      POSTGRES_DB: devknow
+      POSTGRES_USER: devknow
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-devknow}
+      # 中文内容排序与大小写处理
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devknow -d devknow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # pgvector 检索与 HNSW 索引构建都吃内存，2G 起步
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  redis:
+    image: redis:7-alpine
+    container_name: devknow-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
+  redisdata:

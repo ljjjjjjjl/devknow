@@ -1,0 +1,99 @@
+server:
+  port: 8080
+  shutdown: graceful          # 优雅停机：等在途请求结束，避免采集任务被硬杀
+
+spring:
+  application:
+    name: devknow
+  threads:
+    virtual:
+      enabled: true           # 启用虚拟线程：采集是 IO 密集型，平台线程池调优没有收益
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:devknow}
+    username: ${DB_USER:devknow}
+    password: ${DB_PASSWORD:devknow}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      # 注意：虚拟线程执行器可以并发发起成百上千个任务，但数据库连接是有限资源。
+      # 池子给小、超时给短，宁可让任务排队等待（进而暴露瓶颈），
+      # 也不要让连接池被一瞬间打满导致所有请求超时。
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 10000
+      idle-timeout: 300000
+      max-lifetime: 1200000
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 3000ms
+
+  # 数据库版本化管理：所有 DDL 放 db/migration，文件名 V{版本}__{描述}.sql
+  # 迁移文件一旦执行过就不能再改（Flyway 用 checksum 校验），要改请新建 V2__xxx.sql
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    validate-on-migrate: true
+
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+  mvc:
+    problemdetails:
+      enabled: false
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    # 由 SLF4J 接管日志，可用 logging.level.com.devknow.domain.mapper 控制。
+    # 不要用 StdOutImpl —— 它把每条 SQL 直写 stdout，绕过日志级别过滤，
+    # 采集时每 5 秒轮询一次会刷出十几行，把关键日志淹没（实测踩过）。
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto          # 主键用 BIGSERIAL，由数据库生成
+
+devknow:
+  instance-id: ${INSTANCE_ID:worker-local}
+  data:
+    dir: ./data
+    tmp-dir: ./data/tmp
+    keep-repo: false         # 第2周做增量同步时改为 true，可复用已克隆的仓库
+    max-repo-size-mb: 2048
+    clone-timeout-seconds: 300
+  github:
+    # 绝不硬编码。用 classic token 勾 repo scope（fine-grained 无法为第三方公开仓库授权）
+    token: ${GITHUB_TOKEN:}
+    base-url: https://api.github.com
+    page-size: 100           # GitHub 硬上限就是 100
+    timeout-seconds: 30
+    remaining-threshold: 50
+    # 首次采集的时间范围（天）。之后走增量同步，以此为准。
+    # 设 0 表示不限制（会拉全部历史，成熟仓库可能耗时 1-2 小时）
+    since-days: 365
+  worker:
+    enabled: true
+    poll-interval-ms: 5000
+    reclaim-interval-ms: 600000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    root: INFO
+    com.devknow: DEBUG
+    org.eclipse.jgit: WARN
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"

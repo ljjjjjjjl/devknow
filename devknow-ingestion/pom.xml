@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.devknow</groupId>
+        <artifactId>devknow</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>devknow-ingestion</artifactId>
+    <name>devknow-ingestion</name>
+    <description>模块1 · 数据接入流水线：SourceSync(限流/分页) -> Parser -> Chunker -> IndexWriter</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.devknow</groupId>
+            <artifactId>devknow-domain</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.devknow</groupId>
+            <artifactId>devknow-retrieval</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- 令牌桶限流（第3天接入 Redis 版本） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <!-- 以编程方式浅克隆仓库、读取 commit hash（网络不通时的回退方案见 TarballDownloader） -->
+        <dependency>
+            <groupId>org.eclipse.jgit</groupId>
+            <artifactId>org.eclipse.jgit</artifactId>
+        </dependency>
+        <!-- tarball 回退方案需要解压 tar.gz -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-compress</artifactId>
+        </dependency>
+    </dependencies>
+</project>
