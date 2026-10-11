@@ -10,7 +10,7 @@ spring:
       enabled: true           # 启用虚拟线程：采集是 IO 密集型，平台线程池调优没有收益
 
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:devknow}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:devknow_utf8}
     username: ${DB_USER:devknow}
     password: ${DB_PASSWORD:devknow}
     driver-class-name: org.postgresql.Driver

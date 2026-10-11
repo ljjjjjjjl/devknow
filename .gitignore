@@ -45,3 +45,7 @@ desktop.ini
 # ---- 日志 ----
 *.log
 logs/
+# 本地临时文件
+body.json
+start.ps1
+.env.local
