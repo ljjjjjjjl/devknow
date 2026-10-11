@@ -23,7 +23,7 @@
 | 检索 | ❌ 第 3-4 周：BM25 + 向量 + RRF + Rerank |
 | Agent | ❌ 第 5-6 周：ReAct + 工具调用 + SSE |
 | **启动验证** | ✅ **已实测启动成功**：Tomcat 8080、Spring 上下文加载、`/api/health` 返回 200 且中文正常 |
-| **连库验证** | ⚠️ **尚未连过数据库** —— 本机 PostgreSQL 18.4 + pgvector 0.8.2 已就绪，待执行"待验证清单" |
+| **连库验证** | ✅ **已完整跑通**：采集入库 5344 篇 document / 1823 个 chunk；并完成一次完整的数据库迁移（SQL_ASCII → UTF-8 + ICU），迁移后重采验证通过 |
 
 ### 代码规模
 
@@ -193,7 +193,7 @@ curl http://localhost:8080/api/health
 curl http://localhost:8080/api/health/selfcheck
 
 # ③ 数据库表已建好（应有 5 张表 + flyway_schema_history）
-docker exec -it devknow-postgres psql -U devknow -d devknow -c '\dt'
+psql -U devknow -h 127.0.0.1 -d devknow_utf8 -c "\dt"
 ```
 
 ---
@@ -223,7 +223,7 @@ curl -X POST http://localhost:8080/api/admin/sources \
     "type": "GITHUB_REPO",
     "repoUrl": "https://github.com/spring-projects/spring-boot",
     "branch": "main",
-    "docPathPattern": "src/main/antora/modules/ROOT/pages/**/*.adoc",
+    "docPathPattern": "documentation/**/*.adoc,build-plugin/**/*.adoc,*.adoc",
     "license": "Apache-2.0"
   }'
 
@@ -362,7 +362,7 @@ devknow/
 
 ## 第 2 周计划
 
-- `V2__add_pgvector.sql`：`document_chunk` 增加 `embedding vector(1024)` + HNSW 索引
+- `V2__add_pgvector.sql`：`document_chunk` 增加 `embedding vector(1024)` + 部分索引；HNSW 索引在回填完成后单独建
 - `EmbeddingService` 实现：先接 SiliconFlow（bge-m3）跑通，再考虑 DJL 本地推理
 - `V2` 增量更新：按 `content_hash` 与 commit diff 只重建变化部分
 - 多版本：`git tag` 拉取 v3.1/v3.2，写入 `version` 与 `version_order`

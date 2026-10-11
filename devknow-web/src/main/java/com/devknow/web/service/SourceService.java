@@ -1,6 +1,7 @@
 package com.devknow.web.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.devknow.common.api.ErrorCode;
 import com.devknow.common.exception.BizException;
 import com.devknow.domain.dto.SourceCreateRequest;
@@ -9,13 +10,16 @@ import com.devknow.domain.entity.DocumentChunk;
 import com.devknow.domain.entity.KnowledgeSource;
 import com.devknow.domain.entity.IngestionJob;
 import com.devknow.domain.enums.DocType;
+import com.devknow.domain.enums.JobEnums.JobStatus;
 import com.devknow.domain.enums.JobEnums.JobType;
 import com.devknow.domain.enums.SourceType;
 import com.devknow.domain.mapper.DocumentChunkMapper;
 import com.devknow.domain.mapper.DocumentMapper;
+import com.devknow.domain.mapper.IngestionJobMapper;
 import com.devknow.domain.mapper.KnowledgeSourceMapper;
 import com.devknow.ingestion.github.GitHubClient;
 import com.devknow.ingestion.job.IngestionJobService;
+import com.devknow.retrieval.config.EmbeddingProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,19 +45,25 @@ public class SourceService {
     private final KnowledgeSourceMapper sourceMapper;
     private final DocumentMapper documentMapper;
     private final DocumentChunkMapper chunkMapper;
+    private final IngestionJobMapper jobMapper;
     private final IngestionJobService jobService;
     private final GitHubClient gitHubClient;
+    private final EmbeddingProperties embeddingProperties;
 
     public SourceService(KnowledgeSourceMapper sourceMapper,
                          DocumentMapper documentMapper,
                          DocumentChunkMapper chunkMapper,
+                         IngestionJobMapper jobMapper,
                          IngestionJobService jobService,
-                         GitHubClient gitHubClient) {
+                         GitHubClient gitHubClient,
+                         EmbeddingProperties embeddingProperties) {
         this.sourceMapper = sourceMapper;
         this.documentMapper = documentMapper;
         this.chunkMapper = chunkMapper;
+        this.jobMapper = jobMapper;
         this.jobService = jobService;
         this.gitHubClient = gitHubClient;
+        this.embeddingProperties = embeddingProperties;
     }
 
     public List<KnowledgeSource> listSources() {
@@ -151,25 +161,51 @@ public class SourceService {
         }
         stats.put("documentCountByType", byType);
 
-        long unembedded = countUnembeddedChunks();
-        stats.put("chunkWithoutEmbedding", unembedded);
-        stats.put("pendingJobs", jobService.countByStatus(
-                com.devknow.domain.enums.JobEnums.JobStatus.PENDING));
-        stats.put("deadJobs", jobService.countByStatus(
-                com.devknow.domain.enums.JobEnums.JobStatus.DEAD));
+        stats.put("pendingEmbedding", countUnembeddedChunks());
+        stats.put("deadEmbedJobs", countDeadEmbedJobs());
+        stats.put("embedCircuitOpen", isEmbedCircuitOpen());
+        stats.put("pendingJobs", jobService.countByStatus(JobStatus.PENDING));
+        stats.put("deadJobs", jobService.countByStatus(JobStatus.DEAD));
         stats.put("generatedAt", Instant.now().toString());
         return stats;
     }
 
     /**
-     * 尚未向量化的 chunk 数。
+     * 尚未向量化的 chunk 数 —— 回填的进度指标。
      *
-     * <p>第 1 周没有 embedding 列，这个数字等于 chunk 总数 —— 它正是"第 2 周要处理多少"
-     * 的进度指标，所以现在就把它暴露出来。
+     * <p><b>为什么用字符串列名的 {@link QueryWrapper} 而不是 {@code LambdaQueryWrapper}：
+     * {@code DocumentChunk} 实体里没有 {@code embedding} 字段</b>（向量写入全部走手写 SQL，
+     * 实体不需要承载 1024 维数组）。而 {@code LambdaQueryWrapper} 要求属性能被
+     * MyBatis-Plus 解析成列 —— 给字段加 {@code @TableField(exist = false)} 也不行，
+     * 那会让它根本不在 TableInfo 里，调用时抛
+     * {@code can not find lambda cache for this property}。
+     * 用字符串列名直接生成 {@code WHERE embedding IS NULL}，是最简单也最诚实的做法。
+     *
+     * <p>命中 V2 迁移建的 {@code idx_chunk_unembedded} 部分索引，全部嵌完后接近 O(1)；
+     * 若用全表扫描则是 O(总行数)，而这个接口会被频繁调用。
      */
     private long countUnembeddedChunks() {
-        Long total = chunkMapper.selectCount(null);
-        return total == null ? 0L : total;
+        Long count = chunkMapper.selectCount(new QueryWrapper<DocumentChunk>().isNull("embedding"));
+        return count == null ? 0L : count;
+    }
+
+    /** EMBED 类型的死信数。它是 {@code deadJobs} 的子集，但熔断判据只看它。 */
+    private long countDeadEmbedJobs() {
+        Long count = jobMapper.selectCount(new LambdaQueryWrapper<IngestionJob>()
+                .eq(IngestionJob::getJobType, JobType.EMBED.getValue())
+                .eq(IngestionJob::getStatus, JobStatus.DEAD.getValue()));
+        return count == null ? 0L : count;
+    }
+
+    /**
+     * EMBED 熔断器是否已打开。
+     *
+     * <p>判据与 {@code JobWorker.scanAndEnqueueEmbedJobs} 保持一致 ——
+     * 两处必须同步，否则会出现"调度其实已经停了，但接口显示一切正常"，让人排查错方向。
+     */
+    private boolean isEmbedCircuitOpen() {
+        return jobMapper.countDeadEmbedJobsSinceLastSuccess()
+                >= embeddingProperties.getMaxConsecutiveDead();
     }
 
     /** 查询 GitHub 配额，用于验证 token 是否生效。 */

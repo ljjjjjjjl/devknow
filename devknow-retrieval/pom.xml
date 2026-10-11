@@ -19,5 +19,13 @@
             <groupId>com.devknow</groupId>
             <artifactId>devknow-domain</artifactId>
         </dependency>
+
+        <!-- 显式声明，不再依赖 devknow-domain 的传递依赖：
+             @ConfigurationProperties / @Component / Jackson 都来自这里。
+             上游 starter 一旦调整，隐式传递依赖断了会表现为"编译突然失败"。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
     </dependencies>
 </project>

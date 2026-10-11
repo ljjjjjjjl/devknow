@@ -5,6 +5,10 @@ import com.devknow.domain.entity.DocumentChunk;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
+
+import java.util.List;
 
 @Mapper
 public interface DocumentChunkMapper extends BaseMapper<DocumentChunk> {
@@ -38,4 +42,76 @@ public interface DocumentChunkMapper extends BaseMapper<DocumentChunk> {
             )
             """)
     int insertChunk(@Param("c") DocumentChunk chunk);
+
+    /**
+     * 写入向量。<b>只对尚未向量化的行生效</b>。
+     *
+     * <p><b>为什么必须 CAST(... AS vector)</b>：和 {@link #insertChunk} 处理 jsonb 同一个原因 ——
+     * MyBatis 把 String 参数按 {@code varchar} 绑定，而 {@code embedding} 列是 pgvector 的
+     * {@code vector} 类型，PostgreSQL 会拒绝隐式转换：
+     * <pre>
+     * ERROR: column "embedding" is of type vector but expression is of type character varying
+     * </pre>
+     *
+     * <p><b>为什么 {@code AND embedding IS NULL} 不能省</b>：它是这次写入的幂等条件。
+     * 多实例并发、或同一批任务被重入时，不加这个条件会把已经写好的向量覆盖成
+     * "同一条文本的另一次计算结果" —— 数值可能略有差异，但更重要的是它掩盖了
+     * "两个执行流在跑同一个任务"这个真实问题。
+     *
+     * <p><b>{@code embedding} 入参格式</b>：必须是 pgvector 能直接解析的数组字面量，
+     * 如 {@code [0.1,0.2,0.3]}（不是 JSON 对象，也不要带空格以外的分隔符）。
+     * 维度必须与列定义 {@code vector(1024)} 一致，否则 PostgreSQL 报维度不符。
+     *
+     * @return 受影响行数。<b>0 表示这行已被别人写过、或 id 不存在</b> ——
+     *         调用方应据此判断是否发生了并发覆盖，而不是当成错误
+     */
+    @Update("""
+            UPDATE document_chunk
+               SET embedding       = CAST(#{embedding} AS vector),
+                   embedding_model = #{model},
+                   embedded_at     = now()
+             WHERE id = #{id}
+               AND embedding IS NULL
+            """)
+    int updateEmbedding(@Param("id") Long id,
+                        @Param("embedding") String embedding,
+                        @Param("model") String model);
+
+    /**
+     * 取一批尚未向量化的 chunk（回填任务的工作队列）。
+     *
+     * <p><b>为什么用子查询而不是直接过滤 source_id</b>：{@code document_chunk} 表本身
+     * 没有 {@code source_id} 列，必须经 {@code document} 关联。
+     * PostgreSQL 通常会把这种 {@code IN (子查询)} 改写成半连接，不需要手工优化。
+     *
+     * <p><b>为什么不在这里 JOIN 出字段而是用 SELECT c.*</b>：与
+     * {@code IngestionJobMapper.selectNextPendingForUpdate} 保持一致；
+     * 且本查询限定 {@code embedding IS NULL}，取出来的都是空向量，没有传输开销。
+     *
+     * <p><b>为什么要预过滤空白内容</b>：{@code content} 为空或纯空白的 chunk
+     * 会让 embedding API 整批返回 400 —— <b>一条脏数据毒死一整批</b>。
+     * 在这里过滤掉的代价是一次正则，比"整批失败后二分定位"便宜得多。
+     *
+     * <p>注意正则用 {@code [[:space:]]} 而不是反斜杠 s：本 SQL 写在 Java 文本块里，
+     * 而反斜杠 s 在 Java 文本块中是一个合法转义（表示一个空格，JLS 3.10.7），
+     * 会被提前吃掉，最终下发的 SQL 只会删掉空格、留下换行 —— 过滤形同虚设。
+     *
+     * <p><b>ORDER BY c.id</b> 配合 V2 迁移里建的
+     * {@code idx_chunk_unembedded (id) WHERE embedding IS NULL} 部分索引，
+     * 可以让 PostgreSQL 按 id 顺序走索引并在满足 LIMIT 后停止，不需要额外排序。
+     *
+     * @param sourceId 知识源 id
+     * @param limit    单轮最多取多少条（有界工作，避免一轮跑太久）
+     */
+    @Select("""
+            SELECT c.* FROM document_chunk c
+             WHERE c.embedding IS NULL
+               AND c.document_id IN (SELECT id FROM document WHERE source_id = #{sourceId})
+               AND c.content IS NOT NULL
+               AND length(regexp_replace(c.content, '[[:space:]]', '', 'g')) > 0
+             ORDER BY c.id
+             LIMIT #{limit}
+            """)
+    List<DocumentChunk> selectUnembeddedBySource(@Param("sourceId") Long sourceId,
+                                                 @Param("limit") int limit);
 }

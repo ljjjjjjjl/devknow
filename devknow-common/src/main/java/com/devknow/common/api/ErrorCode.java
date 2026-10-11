@@ -39,6 +39,7 @@ public enum ErrorCode {
     EMBEDDING_FAILED(30000, "向量化失败"),
     EMBEDDING_NOT_CONFIGURED(30001, "向量化服务未配置（第2周接入）"),
     RETRIEVAL_FAILED(30002, "检索失败"),
+    EMBEDDING_RATE_LIMITED(30003, "向量化触发限流"),
 
     // ---- Agent ----
     AGENT_NOT_FOUND(40000, "智能体配置不存在"),

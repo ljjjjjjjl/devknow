@@ -80,6 +80,27 @@ devknow:
     enabled: true
     poll-interval-ms: 5000
     reclaim-interval-ms: 600000
+  embedding:
+    # 第 2 周向量化：通过 SiliconFlow 调用 bge-m3（OpenAI 兼容的 embeddings 端点）
+    enabled: ${EMBEDDING_ENABLED:true}
+    # 绝不硬编码。用环境变量 SILICONFLOW_API_KEY
+    api-key: ${SILICONFLOW_API_KEY:}
+    base-url: https://api.siliconflow.cn/v1
+    # 会原样写入 document_chunk.embedding_model
+    model: BAAI/bge-m3
+    # 必须与 V2 迁移里的 vector(1024) 一致
+    dimension: 1024
+    timeout-seconds: 30
+    # 单次请求的条数 + 累计 token 双上限。
+    # token 初值取模型单条上限（8192），这是最保守的假设：单次请求的 input 合计
+    # 也不超过它。实测确认上限后可上调，把实测值记在这里。
+    batch-max-chunks: 100
+    batch-max-tokens: 8192
+    # 回填调度：每 10 分钟扫一次，单轮最多处理 1000 个 chunk
+    scan-interval-ms: 600000
+    scan-limit-per-round: 1000
+    # 熔断阈值：自上次成功以来累积多少个死信后停止创建 EMBED 任务
+    max-consecutive-dead: 3
 
 management:
   endpoints:

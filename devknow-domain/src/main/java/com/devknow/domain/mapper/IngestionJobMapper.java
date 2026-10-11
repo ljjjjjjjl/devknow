@@ -50,4 +50,29 @@ public interface IngestionJobMapper extends BaseMapper<IngestionJob> {
                AND locked_at < #{deadline}
             """)
     List<IngestionJob> selectStaleRunning(@Param("deadline") Instant deadline);
+
+    /**
+     * 熔断器计数：统计"自上次成功以来"累积了多少个死信的 EMBED 任务。
+     *
+     * <p><b>为什么需要它</b>：调度器只判断"有没有 PENDING/RUNNING 的 EMBED 任务"
+     * 是挡不住死信循环的 —— 任务失败进 DEAD 后就不再属于 PENDING/RUNNING，
+     * 调度器下一轮会再创建一个，又失败又进 DEAD，死信表无限增长
+     * （API key 失效时一天能攒 24 个，一个月 720 个）。
+     *
+     * <p>本查询把"永久失败"这个无法从系统内部识别的东西，转化成一个<b>有界的状态</b>：
+     * 累积到阈值就停止创建，等人工处理 —— 修好配置后删掉死信行即自动复位。
+     *
+     * <p>{@code '-infinity'::timestamptz} 处理"从未成功过"的情况：
+     * 此时 COALESCE 取负无穷，所有历史死信都计入。
+     */
+    @Select("""
+            SELECT COUNT(1) FROM ingestion_job
+             WHERE job_type = 'EMBED'
+               AND status = 'DEAD'
+               AND created_at > COALESCE(
+                     (SELECT max(finished_at) FROM ingestion_job
+                       WHERE job_type = 'EMBED' AND status = 'SUCCESS'),
+                     '-infinity'::timestamptz)
+            """)
+    int countDeadEmbedJobsSinceLastSuccess();
 }
