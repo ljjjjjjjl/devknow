@@ -6,8 +6,10 @@ import com.devknow.domain.entity.Document;
 import com.devknow.domain.entity.KnowledgeSource;
 import com.devknow.domain.enums.DocType;
 import com.devknow.domain.mapper.DocumentMapper;
+import com.devknow.ingestion.index.ChunkBackfillService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -36,16 +38,27 @@ public class GitHubIssueMapper {
     private static final int MAX_CONTENT_CHARS = 100_000;
 
     private final DocumentMapper documentMapper;
+    private final ChunkBackfillService chunkBackfillService;
 
-    public GitHubIssueMapper(DocumentMapper documentMapper) {
+    public GitHubIssueMapper(DocumentMapper documentMapper,
+                             ChunkBackfillService chunkBackfillService) {
         this.documentMapper = documentMapper;
+        this.chunkBackfillService = chunkBackfillService;
     }
 
     /**
-     * 写入一条 issue 或 PR。
+     * 写入一条 issue 或 PR，并<b>立即切分</b>。
+     *
+     * <p><b>为什么必须加 {@code @Transactional}</b>：upsert 与切分必须同生共死。
+     * 如果它们分属两个事务，切分失败时 {@code document} 已经落库，而下一次同步会因为
+     * {@code contentHash} 未变被 {@link DocumentMapper#existsUnchanged} 短路直接 return ——
+     * <b>这篇文档的 chunk 永远不会被创建，成为永久孤儿</b>。
+     * 加了事务之后，切分失败会连同 document 一起回滚，下次同步会重新处理它。
+     * 这与第 1 周"文档入库正常、chunk 却始终为 0"是同一类 bug，只是触发面更窄。
      *
      * @return true 表示内容有变化（新增或更新），false 表示内容未变已跳过
      */
+    @Transactional
     public boolean save(KnowledgeSource source, GitHubClient.GitHubIssue issue) {
         String docType = issue.isPullRequest() ? DocType.PR.getValue() : DocType.ISSUE.getValue();
         String externalId = String.valueOf(issue.getNumber());
@@ -74,6 +87,16 @@ public class GitHubIssueMapper {
         document.setMetadata(JsonUtils.toJson(buildMetadata(issue)));
 
         documentMapper.upsert(document);
+
+        Long documentId = documentMapper.selectIdByNaturalKey(source.getId(), docType, externalId);
+        if (documentId == null) {
+            log.warn("文档写入后未取到 id，跳过切分: docType={}, externalId={}", docType, externalId);
+            return false;
+        }
+
+        document.setId(documentId);
+        int chunks = chunkBackfillService.chunkDocument(document);
+        log.debug("issue 已切分: docType={}, externalId={}, chunk 数={}", docType, externalId, chunks);
         return true;
     }
 

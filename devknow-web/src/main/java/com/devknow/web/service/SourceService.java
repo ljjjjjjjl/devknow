@@ -137,6 +137,12 @@ public class SourceService {
         if ("all".equals(normalized) || "docs".equals(normalized)) {
             jobs.add(jobService.createJob(sourceId, JobType.SYNC_DOCS.getValue(), true));
         }
+        // scope=chunk 是**一次性历史回填**入口，刻意不并入 all：
+        // 新采集的 issue/PR 已在 GitHubIssueMapper.save 里顺带切分，
+        // 回填只在"补齐改造之前入库的旧数据"时需要，之后触发它只会空转。
+        if ("chunk".equals(normalized)) {
+            jobs.add(jobService.createJob(sourceId, JobType.CHUNK.getValue(), true));
+        }
         if (jobs.isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "不支持的同步范围: " + scope);
         }

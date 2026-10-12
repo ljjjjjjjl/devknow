@@ -10,6 +10,7 @@ import com.devknow.domain.mapper.IngestionJobMapper;
 import com.devknow.domain.mapper.KnowledgeSourceMapper;
 import com.devknow.ingestion.git.GitRepoDocSyncer;
 import com.devknow.ingestion.github.GitHubIssueSyncer;
+import com.devknow.ingestion.index.ChunkBackfillService;
 import com.devknow.ingestion.index.EmbeddingBackfillService;
 import com.devknow.retrieval.config.EmbeddingProperties;
 import jakarta.annotation.PreDestroy;
@@ -33,6 +34,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @ConditionalOnProperty(prefix = "devknow.worker", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class JobWorker {
 
+    /**
+     * 单轮切分回填最多处理多少篇文档。
+     *
+     * <p>不复用 {@code devknow.embedding.scan-limit-per-round} —— 那是嵌入的批次上限，
+     * 与切分无关。切分是纯 CPU 操作（无网络、无 API 配额），上限可以取得更大。
+     */
+    private static final int CHUNK_SCAN_LIMIT = 1000;
+
     private final IngestionJobService jobService;
     private final KnowledgeSourceMapper sourceMapper;
     private final IngestionJobMapper jobMapper;
@@ -40,6 +49,7 @@ public class JobWorker {
     private final GitHubIssueSyncer issueSyncer;
     private final GitRepoDocSyncer docSyncer;
     private final EmbeddingBackfillService backfillService;
+    private final ChunkBackfillService chunkBackfillService;
     private final EmbeddingProperties embeddingProperties;
 
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -52,6 +62,7 @@ public class JobWorker {
                      GitHubIssueSyncer issueSyncer,
                      GitRepoDocSyncer docSyncer,
                      EmbeddingBackfillService backfillService,
+                     ChunkBackfillService chunkBackfillService,
                      EmbeddingProperties embeddingProperties) {
         this.jobService = jobService;
         this.sourceMapper = sourceMapper;
@@ -60,6 +71,7 @@ public class JobWorker {
         this.issueSyncer = issueSyncer;
         this.docSyncer = docSyncer;
         this.backfillService = backfillService;
+        this.chunkBackfillService = chunkBackfillService;
         this.embeddingProperties = embeddingProperties;
     }
 
@@ -100,6 +112,8 @@ public class JobWorker {
             } else if (JobType.SYNC_DOCS.getValue().equals(job.getJobType())) {
                 count = docSyncer.sync(source, job);
                 syncJob = true;
+            } else if (JobType.CHUNK.getValue().equals(job.getJobType())) {
+                count = chunkBackfillService.backfill(source.getId(), CHUNK_SCAN_LIMIT);
             } else if (JobType.EMBED.getValue().equals(job.getJobType())) {
                 count = backfillService.backfill(source.getId(),
                         embeddingProperties.getScanLimitPerRound());

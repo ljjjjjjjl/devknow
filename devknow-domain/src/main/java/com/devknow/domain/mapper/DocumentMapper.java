@@ -7,6 +7,8 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.List;
+
 @Mapper
 public interface DocumentMapper extends BaseMapper<Document> {
 
@@ -86,4 +88,32 @@ public interface DocumentMapper extends BaseMapper<Document> {
                         @Param("docType") String docType,
                         @Param("externalId") String externalId,
                         @Param("contentHash") String contentHash);
+
+    /**
+     * 取一批尚未切分的 issue/PR（切分回填的工作队列）。
+     *
+     * <p><b>为什么必须过滤空正文</b>：现有语料里有 159 篇（ISSUE 139 + PR 20）
+     * 正文为 NULL 或纯空白。它们切不出任何 chunk，于是<b>永远满足"没有对应 chunk"</b> ——
+     * 每一轮回填都被重新取出、重新切分、又切出 0 条，回填永远不归零，
+     * 调度器每轮都空转并打一条"未写入 N 条"的告警。
+     *
+     * <p><b>为什么用 {@code NOT EXISTS} 而不新增一个"已切分"标记列</b>：
+     * 这条查询本身就是待办列表，不需要额外的状态字段与迁移
+     * （与 {@code WHERE embedding IS NULL} 是同一个模式）。
+     * 代价是一次 anti-join，在数千行规模下是毫秒级。
+     *
+     * <p>{@code ORDER BY d.id} 让处理顺序稳定，天然可断点续跑。
+     */
+    @Select("""
+            SELECT d.* FROM document d
+             WHERE d.doc_type IN ('ISSUE', 'PR')
+               AND d.source_id = #{sourceId}
+               AND d.raw_content IS NOT NULL
+               AND btrim(d.raw_content) <> ''
+               AND NOT EXISTS (SELECT 1 FROM document_chunk c WHERE c.document_id = d.id)
+             ORDER BY d.id
+             LIMIT #{limit}
+            """)
+    List<Document> selectUnchunkedIssues(@Param("sourceId") Long sourceId,
+                                         @Param("limit") int limit);
 }
