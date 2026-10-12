@@ -1,6 +1,7 @@
 package com.devknow.domain.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.devknow.domain.dto.ChunkSearchHit;
 import com.devknow.domain.entity.DocumentChunk;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
@@ -114,4 +115,60 @@ public interface DocumentChunkMapper extends BaseMapper<DocumentChunk> {
             """)
     List<DocumentChunk> selectUnembeddedBySource(@Param("sourceId") Long sourceId,
                                                  @Param("limit") int limit);
+    /**
+     * 向量检索：按余弦距离取 top-K。
+     *
+     * <p>{@code CAST(#{queryVector} AS vector)} 不能省 —— 和 {@code insertChunk} 处理 jsonb
+     * 是同一个原因：MyBatis 把 String 参数按 varchar 绑定，PostgreSQL 拒绝隐式转 vector。
+     *
+     * <p>别名一律用 snake_case（{@code chunk_id} 而非 {@code chunkId}）：PostgreSQL 会把
+     * 未加引号的标识符折成小写（{@code chunkId} → {@code chunkid}），而 record 组件名是
+     * {@code chunkId}。用 snake_case 配合已开启的 {@code map-underscore-to-camel-case=true}
+     * 是确定能对上的写法。
+     *
+     * <p>{@code ORDER BY ... LIMIT} 这个形态是 pgvector HNSW 索引能生效的前提
+     * （索引与操作符必须匹配：{@code vector_cosine_ops} ←→ {@code <=>}）。
+     */
+    @Select("""
+            SELECT c.id           AS chunk_id,
+                   c.document_id  AS document_id,
+                   c.heading_path AS heading_path,
+                   c.content      AS content,
+                   1 - (c.embedding <=> CAST(#{queryVector} AS vector)) AS similarity
+            FROM document_chunk c
+            WHERE c.embedding IS NOT NULL
+            ORDER BY c.embedding <=> CAST(#{queryVector} AS vector)
+            LIMIT #{limit}
+            """)
+    List<ChunkSearchHit> searchByVector(@Param("queryVector") String queryVector,
+                                        @Param("limit") int limit);
+
+    /**
+     * 词法检索：按 ts_rank 取 top-K。
+     *
+     * <p>{@code ts_rank} <b>不是 BM25</b> —— 它是 PostgreSQL 内置的词频类排序函数，
+     * 和 BM25 的 idf/k1/b 无关。作用上等价于"精确词匹配"这一路，但不是同一个算法。
+     *
+     * <p><b>⚠️ 查询侧的点号归一化必须与 V4 迁移里生成列的表达式逐字一致。</b>
+     * PostgreSQL 会把整条带点字符串（{@code spring.data.redis.host}）当成【一个 host token】，
+     * 索引侧在 V4 里把它拆成了四段，查询侧不拆就永远对不上 ——
+     * 表现为<b>静默的 0 命中</b>，不报错、不告警。
+     * 两处表达式一旦漂移，词法路会整体失效且很难察觉。
+     *
+     * <p>{@code plainto_tsquery} 用 AND 连接词素：不加引号的多个词是"全部都要出现"。
+     */
+    @Select("""
+            SELECT c.id           AS chunk_id,
+                   c.document_id  AS document_id,
+                   c.heading_path AS heading_path,
+                   c.content      AS content,
+                   ts_rank(c.content_tsv, query) AS similarity
+            FROM document_chunk c,
+                 plainto_tsquery('english', regexp_replace(#{query}, '\\.', '. ', 'g')) query
+            WHERE c.content_tsv @@ query
+            ORDER BY similarity DESC
+            LIMIT #{limit}
+            """)
+    List<ChunkSearchHit> searchByKeyword(@Param("query") String query,
+                                         @Param("limit") int limit);
 }

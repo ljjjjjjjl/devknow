@@ -2,12 +2,15 @@ package com.devknow.web.controller;
 
 import com.devknow.common.api.ApiResponse;
 import com.devknow.domain.dto.JobVO;
+import com.devknow.domain.dto.SearchRequest;
+import com.devknow.domain.dto.SearchResult;
 import com.devknow.domain.dto.SourceCreateRequest;
 import com.devknow.domain.dto.SourceVO;
 import com.devknow.domain.entity.IngestionJob;
 import com.devknow.domain.entity.KnowledgeSource;
 import com.devknow.ingestion.github.GitHubClient;
 import com.devknow.ingestion.job.IngestionJobService;
+import com.devknow.retrieval.RetrievalService;
 import com.devknow.web.service.SourceService;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
@@ -24,7 +27,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 后台管理接口：知识源、采集任务、统计。
+ * 后台管理接口：知识源、采集任务、统计、检索。
  *
  * <p>Day 6 的验收标准就是这组接口能跑通完整闭环：
  * <b>建源 → 触发同步 → 查任务状态 → 看统计</b>。
@@ -36,10 +39,14 @@ public class AdminController {
 
     private final SourceService sourceService;
     private final IngestionJobService jobService;
+    private final RetrievalService retrievalService;
 
-    public AdminController(SourceService sourceService, IngestionJobService jobService) {
+    public AdminController(SourceService sourceService,
+                           IngestionJobService jobService,
+                           RetrievalService retrievalService) {
         this.sourceService = sourceService;
         this.jobService = jobService;
+        this.retrievalService = retrievalService;
     }
 
     // ---------------- 知识源 ----------------
@@ -65,7 +72,7 @@ public class AdminController {
     /**
      * 触发同步。
      *
-     * @param scope issues / docs / all，默认 all
+     * @param scope issues / docs / chunk / all，默认 all
      */
     @PostMapping("/sources/{id}/sync")
     public ApiResponse<List<JobVO>> triggerSync(@PathVariable Long id,
@@ -107,5 +114,25 @@ public class AdminController {
                 "remaining", info.getRemaining() == null ? 0 : info.getRemaining(),
                 "resetAt", info.resetAt() == null ? "" : info.resetAt().toString()
         ));
+    }
+
+    // ---------------- 检索 ----------------
+
+    /**
+     * 混合检索：全文 + 向量双路，RRF 融合。
+     *
+     * <p>{@code query} 为空由 {@link RetrievalService} 抛业务异常，
+     * 不在这里判 —— 校验规则属于检索语义，放在服务层只有一份。
+     *
+     * <p>返回体里的 {@code rrfScore} 只在同一次 query 内可比（RRF 分数带很窄，
+     * 实测跨度仅 6%），判断"哪一路贡献了什么"要看 {@code vectorRank} / {@code keywordRank}。
+     */
+    @PostMapping("/search")
+    public ApiResponse<List<SearchResult>> search(@RequestBody SearchRequest request) {
+        List<SearchResult> results = retrievalService.search(
+                request.query(), request.topKOrDefault());
+        log.info("检索: query={}, topK={}, 命中 {} 条",
+                request.query(), request.topKOrDefault(), results.size());
+        return ApiResponse.ok(results);
     }
 }

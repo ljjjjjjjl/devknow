@@ -1,6 +1,7 @@
 package com.devknow.ingestion.index;
 
 import com.devknow.common.embedding.EmbeddingService;
+import com.devknow.common.embedding.PgVector;
 import com.devknow.domain.entity.DocumentChunk;
 import com.devknow.domain.mapper.DocumentChunkMapper;
 import com.devknow.retrieval.config.EmbeddingProperties;
@@ -197,7 +198,7 @@ public class EmbeddingBackfillService {
             for (int i = 0; i < unit.size(); i++) {
                 Long chunkId = unit.get(i).getId();
                 int affected = documentChunkMapper.updateEmbedding(
-                        chunkId, toPgVector(vectors.get(i)), model);
+                        chunkId, PgVector.of(vectors.get(i)), model);
                 if (affected == 0) {
                     // 不是错误：这行已被其他执行流写过（并发或任务重入），
                     // 幂等条件 AND embedding IS NULL 按预期拦住了覆盖。
@@ -211,22 +212,4 @@ public class EmbeddingBackfillService {
         return written == null ? 0 : written;
     }
 
-    /**
-     * 转成 pgvector 的字面量格式：{@code [0.1,0.2,0.3]}。
-     *
-     * <p>统一<b>无空格</b>格式。pgvector 本身能接受带空格的写法，但
-     * {@code updateEmbedding} 用 {@code CAST(... AS vector)} 解析这个字符串，
-     * 无空格可省掉一次字符串扫描，也让日志里的向量更紧凑。
-     */
-    private static String toPgVector(float[] vector) {
-        StringBuilder sb = new StringBuilder(vector.length * 8 + 2);
-        sb.append('[');
-        for (int i = 0; i < vector.length; i++) {
-            if (i > 0) {
-                sb.append(',');
-            }
-            sb.append(vector[i]);
-        }
-        return sb.append(']').toString();
-    }
 }
