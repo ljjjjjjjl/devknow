@@ -12,7 +12,13 @@ package com.devknow.domain.dto;
  * {@code null} 表示这一路没命中它。这两个值比分数有用得多：
  * "这条向量第 3、词法第 1，所以融合排第一" 是可直接讲出来的结论。
  *
+ * <p><b>列表顺序以谁为准</b>：rerank 开启时，顺序 = cross-encoder 精排顺序；
+ * 此时 {@code rrfScore}/{@code vectorRank}/{@code keywordRank} 退化为诊断字段，
+ * 用来回答"它当初为什么能进候选"。调用方<b>不要</b>按 {@code rrfScore} 重排列表 ——
+ * 那会得到与返回顺序不一致的结果。
+ *
  * @param rrfScore    RRF 融合分数，<b>只在同一次 query 内可比</b>
+ * @param rerankScore cross-encoder 精排分数；null = 本次未走 rerank
  * @param vectorRank  向量路排名，null = 该路未命中
  * @param keywordRank 词法路排名，null = 该路未命中
  */
@@ -23,6 +29,7 @@ public record SearchResult(
         String headingPath,
         String content,
         double rrfScore,
+        Double rerankScore,
         Integer vectorRank,
         Integer keywordRank,
         String documentUrl

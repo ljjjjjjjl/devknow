@@ -3,6 +3,7 @@ package com.devknow.web;
 import com.devknow.ingestion.config.DevknowProperties;
 import com.devknow.ingestion.config.GitHubProperties;
 import com.devknow.retrieval.config.EmbeddingProperties;
+import com.devknow.retrieval.rerank.RerankProperties;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -23,7 +24,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication(scanBasePackages = "com.devknow")
 @MapperScan("com.devknow.domain.mapper")
 @EnableScheduling
-@EnableConfigurationProperties({DevknowProperties.class, GitHubProperties.class, EmbeddingProperties.class})
+@EnableConfigurationProperties({DevknowProperties.class, GitHubProperties.class,
+        EmbeddingProperties.class, RerankProperties.class})
 public class DevknowApplication {
 
     public static void main(String[] args) {

@@ -12,7 +12,7 @@
 
     <artifactId>devknow-retrieval</artifactId>
     <name>devknow-retrieval</name>
-    <description>模块2 · 混合检索：版本过滤 -> BM25 + 向量 -> RRF 融合 -> Rerank（第3-4周填充）</description>
+    <description>模块2 · 混合检索：全文检索（ts_rank）+ 向量 -> RRF 融合 -> Rerank（第3-4周填充）</description>
 
     <dependencies>
         <dependency>

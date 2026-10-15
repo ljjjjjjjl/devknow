@@ -9,6 +9,8 @@ import com.devknow.domain.dto.SearchResult;
 import com.devknow.domain.entity.Document;
 import com.devknow.domain.mapper.DocumentChunkMapper;
 import com.devknow.domain.mapper.DocumentMapper;
+import com.devknow.retrieval.rerank.RerankProperties;
+import com.devknow.retrieval.rerank.SiliconFlowRerankService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -56,13 +58,19 @@ public class RetrievalService {
     private final EmbeddingService embeddingService;
     private final DocumentChunkMapper chunkMapper;
     private final DocumentMapper documentMapper;
+    private final SiliconFlowRerankService rerankService;
+    private final RerankProperties rerankProperties;
 
     public RetrievalService(EmbeddingService embeddingService,
                             DocumentChunkMapper chunkMapper,
-                            DocumentMapper documentMapper) {
+                            DocumentMapper documentMapper,
+                            SiliconFlowRerankService rerankService,
+                            RerankProperties rerankProperties) {
         this.embeddingService = embeddingService;
         this.chunkMapper = chunkMapper;
         this.documentMapper = documentMapper;
+        this.rerankService = rerankService;
+        this.rerankProperties = rerankProperties;
     }
 
     /**
@@ -80,14 +88,21 @@ public class RetrievalService {
         }
         float[] queryVec = embeddingService.embedOne(query);
 
-        // 候选数不能小于 topK：否则两路各取 20 条，融合后最多只有 40 条，
+        // 候选窗口：接 rerank 时要显著开大，原因有实测数据 ——
+        // @WebMvcTest 的权威文档（Testing Spring Boot Applications）在词法路排第 27，
+        // 窗口 20 时它压根进不了候选池。rerank 只能重排候选，看不到就救不回来，
+        // 所以这类失败必须在"取候选"这一步解决，属于召回问题而非排序问题。
+        //
+        // 窗口也不能小于 topK：否则两路各取 20 条、融合后最多 40 条，
         // 而 SearchRequest 允许 topK 到 50 —— 会出现"要 50 条只给 40 条"的静默截断。
-        int candidates = Math.max(RRF_CANDIDATES, topK);
+        int window = Math.max(
+                rerankProperties.isUsable() ? rerankProperties.getCandidateWindow() : RRF_CANDIDATES,
+                topK);
 
         List<ChunkSearchHit> vectorHits =
-                chunkMapper.searchByVector(PgVector.of(queryVec), candidates);
+                chunkMapper.searchByVector(PgVector.of(queryVec), window);
         List<ChunkSearchHit> keywordHits =
-                chunkMapper.searchByKeyword(query, candidates);
+                chunkMapper.searchByKeyword(query, window);
 
         log.debug("检索候选: query={}, vectorHits={}, keywordHits={}",
                 query, vectorHits.size(), keywordHits.size());
@@ -104,6 +119,24 @@ public class RetrievalService {
             return List.of();
         }
 
+        if (rerankProperties.isUsable()) {
+            List<SearchResult> reranked =
+                    rerankAndMerge(query, topK, rrfScores, hitById, vectorRank, keywordRank);
+            if (reranked != null) {
+                return reranked;
+            }
+            log.warn("rerank 未生效，本次退回 RRF 顺序: query={}", query);
+        }
+
+        return enrichByRrf(topK, rrfScores, hitById, vectorRank, keywordRank);
+    }
+
+    /** 纯 RRF 排序。既是 rerank 关闭时的路径，也是 rerank 失败时的降级路径。 */
+    private List<SearchResult> enrichByRrf(int topK,
+                                           Map<Long, Double> rrfScores,
+                                           Map<Long, ChunkSearchHit> hitById,
+                                           Map<Long, Integer> vectorRank,
+                                           Map<Long, Integer> keywordRank) {
         List<Long> topIds = rrfScores.entrySet().stream()
                 .sorted(Map.Entry.<Long, Double>comparingByValue().reversed()
                         .thenComparing(Map.Entry.<Long, Double>comparingByKey()))
@@ -111,7 +144,84 @@ public class RetrievalService {
                 .map(Map.Entry::getKey)
                 .toList();
 
-        return enrich(topIds, hitById, rrfScores, vectorRank, keywordRank);
+        return enrich(topIds, hitById, rrfScores, vectorRank, keywordRank, null);
+    }
+
+    /**
+     * cross-encoder 精排，按文档归并后取前 topK。
+     *
+     * <p>候选池取<b>两路的并集</b>，不是 RRF 的 top-N。原因：RRF 的 {@code 1/(k+rank)}
+     * 对"只被一路命中"的 chunk 惩罚很重 —— 词法路排 27 得 0.0115，低于向量路排 20 的 0.0125，
+     * 于是它永远进不了 RRF 的头部。并集把这个结构性劣势绕开了。
+     *
+     * @return 精排结果；rerank 不可用时返回 {@code null}，由调用方退回 RRF 顺序
+     */
+    private List<SearchResult> rerankAndMerge(String query, int topK,
+                                              Map<Long, Double> rrfScores,
+                                              Map<Long, ChunkSearchHit> hitById,
+                                              Map<Long, Integer> vectorRank,
+                                              Map<Long, Integer> keywordRank) {
+        List<Long> poolIds = new ArrayList<>(hitById.keySet());
+        List<String> documents = new ArrayList<>(poolIds.size());
+        for (Long chunkId : poolIds) {
+            documents.add(buildRerankText(hitById.get(chunkId)));
+        }
+
+        double[] scores;
+        try {
+            scores = rerankService.rerank(query, documents);
+        } catch (Exception e) {
+            log.warn("rerank 调用失败: query={}, 候选数={}", query, poolIds.size(), e);
+            return null;
+        }
+        if (scores == null || scores.length != poolIds.size()) {
+            log.warn("rerank 返回条数不符: query={}, expected={}, actual={}",
+                    query, poolIds.size(), scores == null ? "null" : scores.length);
+            return null;
+        }
+
+        // 按 documentId 归并：同一文档的多个 chunk 竞争，取分最高的那个当代表。
+        // 少了这一步，rerank 会把同一篇文档的多个片段一起顶上去，
+        // top-5 退化成"一篇文档的 5 个片段" —— 第 3 周被 RRF 压下去的碎片刷屏会回归。
+        Map<Long, Integer> bestIndexByDoc = new LinkedHashMap<>();
+        Map<Long, Double> bestScoreByDoc = new HashMap<>();
+        for (int i = 0; i < poolIds.size(); i++) {
+            Long docId = hitById.get(poolIds.get(i)).documentId();
+            Double best = bestScoreByDoc.get(docId);
+            if (best == null || scores[i] > best) {
+                bestScoreByDoc.put(docId, scores[i]);
+                bestIndexByDoc.put(docId, i);
+            }
+        }
+
+        List<Long> orderedDocIds = bestScoreByDoc.entrySet().stream()
+                .sorted(Map.Entry.<Long, Double>comparingByValue().reversed()
+                        .thenComparing(Map.Entry.<Long, Double>comparingByKey()))
+                .limit(topK)
+                .map(Map.Entry::getKey)
+                .toList();
+
+        List<Long> chunkIds = new ArrayList<>(orderedDocIds.size());
+        Map<Long, Double> rerankScores = new HashMap<>();
+        for (Long docId : orderedDocIds) {
+            Long chunkId = poolIds.get(bestIndexByDoc.get(docId));
+            chunkIds.add(chunkId);
+            rerankScores.put(chunkId, bestScoreByDoc.get(docId));
+        }
+        return enrich(chunkIds, hitById, rrfScores, vectorRank, keywordRank, rerankScores);
+    }
+
+    /**
+     * 送 rerank 的文本：{@code heading_path + 正文}。
+     *
+     * <p>必须带上标题。正文里没有标题信息，而标题往往是判断相关性最强的信号 ——
+     * 问 {@code @WebMvcTest} 时，"Testing Spring Boot Applications" 这个标题
+     * 比正文里任何一句都更能说明它就是该返回的那篇。
+     */
+    private static String buildRerankText(ChunkSearchHit hit) {
+        String content = hit.content() == null ? "" : hit.content();
+        String heading = hit.headingPath();
+        return (heading == null || heading.isBlank()) ? content : heading + "\n" + content;
     }
 
     // ------------------------------------------------------------------
@@ -153,7 +263,8 @@ public class RetrievalService {
                                       Map<Long, ChunkSearchHit> hitById,
                                       Map<Long, Double> scores,
                                       Map<Long, Integer> vectorRank,
-                                      Map<Long, Integer> keywordRank) {
+                                      Map<Long, Integer> keywordRank,
+                                      Map<Long, Double> rerankScores) {
         if (orderedIds.isEmpty()) {
             return List.of();
         }
@@ -176,6 +287,7 @@ public class RetrievalService {
                     hit.headingPath(),
                     hit.content(),
                     scores.get(id),
+                    rerankScores == null ? null : rerankScores.get(id),
                     vectorRank.get(id),
                     keywordRank.get(id),
                     doc == null ? null : doc.getUrl()));

@@ -101,6 +101,19 @@ devknow:
     scan-limit-per-round: 1000
     # 熔断阈值：自上次成功以来累积多少个死信后停止创建 EMBED 任务
     max-consecutive-dead: 3
+  rerank:
+    # 第 4 周重排序：cross-encoder 精排，与向量化同平台、同 key
+    enabled: ${RERANK_ENABLED:true}
+    api-key: ${SILICONFLOW_API_KEY:}
+    base-url: https://api.siliconflow.cn/v1
+    model: BAAI/bge-reranker-v2-m3
+    timeout-seconds: 30
+    # 每路候选窗口。必须明显大于纯 RRF 的 20：实测权威文档
+    # （Testing Spring Boot Applications）在词法路排第 27，
+    # 窗口 20 时它进不了候选池，rerank 再准也看不到它。
+    candidate-window: 50
+    # 送 rerank 的单条截断长度（字符），控制请求体大小
+    max-document-chars: 800
 
 management:
   endpoints:
