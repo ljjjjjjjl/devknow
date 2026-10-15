@@ -5,6 +5,7 @@ import com.devknow.agent.client.ChatClient;
 import com.devknow.agent.client.ChatMessage;
 import com.devknow.agent.client.ToolCall;
 import com.devknow.agent.config.AgentChatProperties;
+import com.devknow.agent.stream.AgentStreamListener;
 import com.devknow.agent.tool.AgentTool;
 import com.devknow.agent.tool.ToolResult;
 import com.devknow.common.api.ErrorCode;
@@ -29,11 +30,15 @@ import java.util.stream.Collectors;
 /**
  * ReAct 循环：LLM 决策 → 执行工具 → 结果回填 → 再决策，直到给出最终回答或触发熔断。
  *
- * <p>第 5 周非流式最小闭环。两条硬规则：
+ * <p>两条硬规则：
  * <ol>
  *   <li>工具失败<b>喂回给模型</b>而不是中断循环 —— 模型看到错误后能自己决定换参数还是放弃</li>
  *   <li>{@code max_steps} 硬熔断 —— 防无限工具调用</li>
  * </ol>
+ *
+ * <p><b>循环只有一份</b>：{@link #run} 与 {@link #stream} 走同一个 {@code loop}，
+ * 差别只在"模型调用用哪种传输"。这样流式是叠加在已验证的循环上，而不是另写一套 ——
+ * 两套循环最容易出的问题是"改了流式那条，忘了非流式那条"。
  */
 @Slf4j
 @Service
@@ -53,7 +58,22 @@ public class AgentRunner {
         this.tools = tools;
     }
 
+    /** 非流式：一次拿到完整回答。 */
     public AgentChatResponse run(AgentConfig config, String query) {
+        return loop(config, query, AgentStreamListener.NOOP);
+    }
+
+    /**
+     * 流式：回答一边生成一边通过 {@code listener} 推出增量。
+     *
+     * <p>返回值仍是完整回答，方便调用方在结束后统一落库 / 打日志；
+     * 调用方不需要自己把增量拼一遍。
+     */
+    public AgentChatResponse stream(AgentConfig config, String query, AgentStreamListener listener) {
+        return loop(config, query, listener == null ? AgentStreamListener.NOOP : listener);
+    }
+
+    private AgentChatResponse loop(AgentConfig config, String query, AgentStreamListener sink) {
         if (query == null || query.isBlank()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "query 不能为空");
         }
@@ -69,15 +89,29 @@ public class AgentRunner {
         messages.add(ChatMessage.system(buildSystemPrompt(config, available)));
         messages.add(ChatMessage.user(query));
 
+        boolean streaming = sink != AgentStreamListener.NOOP;
         List<Citation> citations = new ArrayList<>();
+        // 流式下引用是边检索边推的，同一个 documentId 只推首次出现，
+        // 保证"推出去的顺序"与最终 citations 完全一致
+        Set<Long> emittedCitationIds = new LinkedHashSet<>();
+
         for (int step = 1; step <= maxSteps; step++) {
-            AssistantTurn turn = chatClient.chat(model, temperature, messages, toolSpecs);
+            sink.onStep(step);
+            AssistantTurn turn = streaming
+                    ? chatClient.streamChat(model, temperature, messages, toolSpecs, sink::onDelta)
+                    : chatClient.chat(model, temperature, messages, toolSpecs);
 
             if (turn.hasToolCalls()) {
                 messages.add(ChatMessage.assistantToolCalls(turn.toolCalls()));
                 for (ToolCall call : turn.toolCalls()) {
                     log.info("Agent 第 {} 步调用工具: name={}", step, call.name());
+                    sink.onTool(call.name(), call.arguments());
                     ToolResult result = safeExecute(findTool(available, call.name()), call);
+                    for (Citation citation : result.citations()) {
+                        if (emittedCitationIds.add(citation.documentId())) {
+                            sink.onCitation(citation);
+                        }
+                    }
                     citations.addAll(result.citations());
                     messages.add(ChatMessage.tool(call.id(), result.textForLlm()));
                 }
