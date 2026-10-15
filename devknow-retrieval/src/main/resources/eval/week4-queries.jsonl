@@ -1,0 +1,50 @@
+{"id":"ki-01","set":"known-item","query":"Use a separate ObjectMapper per technology","expectedDocumentIds":[240],"note":"issue 标题，答案即该 issue"}
+{"id":"ki-02","set":"known-item","query":"GraphQL slice tests should load '@ControllerAdvice' beans","expectedDocumentIds":[2949,2950],"note":"issue + 同一改动的 PR（issue 已 superseded，编号相邻 #49659/#49660）"}
+{"id":"ki-03","set":"known-item","query":"Automatically configure Spring Kafka's observation convention beans","expectedDocumentIds":[2040],"note":"issue 标题"}
+{"id":"ki-04","set":"known-item","query":"Unable to run nativeTests when non-constant value is passed as command-line app args","expectedDocumentIds":[2602],"note":"issue 标题"}
+{"id":"ki-05","set":"known-item","query":"ConfigTreePropertySource.PropertyFileContent does not implement equals/hashCode","expectedDocumentIds":[3441],"note":"issue 标题，含点号标识符"}
+{"id":"ki-06","set":"known-item","query":"Allow beans created in MockRestServiceServerAutoConfiguration to be overridden","expectedDocumentIds":[489,1938],"note":"issue + 同一改动的 PR（标题几乎逐字相同；issue 已 superseded）"}
+{"id":"ki-07","set":"known-item","query":"Regression in ImportsCleanupPostProcessor in Spring Boot 3.5.14 (potentially in 4.0.6)","expectedDocumentIds":[3490],"note":"issue 标题"}
+{"id":"ki-08","set":"known-item","query":"Document the need for a JdbcDialect bean when using Spring Data JDBC and AOT","expectedDocumentIds":[1344],"note":"issue 标题"}
+{"id":"ki-09","set":"known-item","query":"tomcat-embed-core and tomcat-embed-websocket, update to 10.1.54 within spring 3.5.x","expectedDocumentIds":[3336],"note":"issue 标题"}
+{"id":"ki-10","set":"known-item","query":"Create reusable default TaskScheduler configuration","expectedDocumentIds":[2567],"note":"issue 标题"}
+{"id":"ki-11","set":"known-item","query":"Incorrect/missing Hibernate version in release notes","expectedDocumentIds":[5007],"note":"issue 标题"}
+{"id":"ki-12","set":"known-item","query":"Some logs are dismissed during context creation","expectedDocumentIds":[28],"note":"issue 标题"}
+{"id":"ki-13","set":"known-item","query":"Provide PathPatternRequestMatcher.Builder that correctly configures the servlet path","expectedDocumentIds":[301],"note":"issue 标题"}
+{"id":"ki-14","set":"known-item","query":"Fail gRPC servlet applications if server.http2.enabled is not enabled","expectedDocumentIds":[2273],"note":"issue 标题，含配置项"}
+{"id":"ki-15","set":"known-item","query":"IllegalState Failed to load ApplicationContext","expectedDocumentIds":[2534],"note":"issue 标题"}
+{"id":"ki-16","set":"known-item","query":"Rainbow Gum a logging framework supports LoggingSystem (maybe a doc link?)","expectedDocumentIds":[5124],"note":"issue 标题"}
+{"id":"ki-17","set":"known-item","query":"Spring Boot Maven plugin doesn't recognize new Java 25 main methods","expectedDocumentIds":[1585],"note":"issue 标题"}
+{"id":"ki-18","set":"known-item","query":"Implement multi-tenancy support with automatic tenant context propagation","expectedDocumentIds":[3940],"note":"issue 标题"}
+{"id":"ki-19","set":"known-item","query":"Add architecture option for spring-boot-maven-plugin when using buildpacks","expectedDocumentIds":[241],"note":"issue 标题"}
+{"id":"ki-20","set":"known-item","query":"Document SSL reload with letsencrypt","expectedDocumentIds":[311,3482],"note":"issue + 同一改动的 PR（同为 type: documentation；issue 已 superseded）"}
+{"id":"ki-21","set":"known-item","query":"UnsatisfiedLinkError in Docker container when using WebClient","expectedDocumentIds":[1335],"note":"issue 标题"}
+{"id":"ki-22","set":"known-item","query":"Eagerly initialize JdbcTemplate's SQLExceptionTranslator without requiring a DB connection","expectedDocumentIds":[193],"note":"issue 标题"}
+{"id":"ki-23","set":"known-item","query":"Redis HealthIndicator status not showing in actuator","expectedDocumentIds":[4513],"note":"issue 标题"}
+{"id":"ki-24","set":"known-item","query":"Allow tools jarmode to run the extract command from an unpacked jar","expectedDocumentIds":[385],"note":"issue 标题"}
+{"id":"ki-25","set":"known-item","query":"Allow disabling OAuth2 / OIDC provider discovery explicitly","expectedDocumentIds":[362,5161],"note":"issue + 同一改动的 PR（标题近乎相同）"}
+{"id":"ki-26","set":"known-item","query":"Allow Hibernate to use Spring Boot's validator","expectedDocumentIds":[75],"note":"issue 标题"}
+{"id":"ki-27","set":"known-item","query":"CVE-2025-68161: org.apache.logging.log4j / log4j-api 2.24.3","expectedDocumentIds":[1889],"note":"issue 标题"}
+{"id":"ki-28","set":"known-item","query":"Provide auto-configuration for Liquibase with NoSQL databases","expectedDocumentIds":[302],"note":"issue 标题"}
+{"id":"ki-29","set":"known-item","query":"Upgrade 3.4.x & 3.5.x to Byte Buddy 1.17.8","expectedDocumentIds":[990],"note":"issue 标题"}
+{"id":"ki-30","set":"known-item","query":"Restore support for Jersey now that it supports JAX-RS 4 (Jakarta EE 11)","expectedDocumentIds":[1073],"note":"issue 标题"}
+{"id":"cn-01","set":"chinese","query":"如何配置多个数据源","expectedDocumentIds":[2079],"note":"中文提问 → how-to/data-access"}
+{"id":"cn-02","set":"chinese","query":"Spring Boot 怎么连接 Redis","expectedDocumentIds":[2216],"note":"中文提问 → reference/data/nosql"}
+{"id":"cn-03","set":"chinese","query":"如何激活不同的 profile","expectedDocumentIds":[2227],"note":"中文提问 → features/profiles"}
+{"id":"cn-04","set":"chinese","query":"怎么自定义 JSON 序列化","expectedDocumentIds":[2224],"note":"中文提问 → features/json"}
+{"id":"cn-05","set":"chinese","query":"如何编写一个自动配置类","expectedDocumentIds":[2220],"note":"中文提问 → features/developing-auto-configuration"}
+{"id":"cn-06","set":"chinese","query":"怎么配置日志级别","expectedDocumentIds":[2226],"note":"中文提问 → features/logging"}
+{"id":"cn-07","set":"chinese","query":"如何给应用写单元测试","expectedDocumentIds":[2368],"note":"中文提问 → testing/spring-boot-applications"}
+{"id":"cn-08","set":"chinese","query":"如何把应用打包成可执行 jar","expectedDocumentIds":[2378],"note":"中文提问 → using/packaging-for-production"}
+{"id":"cn-09","set":"chinese","query":"怎么查看应用的运行状态端点","expectedDocumentIds":[2119],"note":"中文提问 → actuator/endpoints"}
+{"id":"cn-10","set":"chinese","query":"如何排除某个自动配置类","expectedDocumentIds":[2373],"note":"中文提问 → using/auto-configuration"}
+{"id":"sym-01","set":"symbol","query":"@ConfigurationProperties","expectedDocumentIds":[2221,1930],"note":"符号，答案=讲该特性的文档页（Externalized Configuration / Configuration Properties）"}
+{"id":"sym-02","set":"symbol","query":"@SpringBootTest","expectedDocumentIds":[2368],"note":"符号，答案=Testing Spring Boot Applications"}
+{"id":"sym-03","set":"symbol","query":"@WebMvcTest","expectedDocumentIds":[2368,2369,2099],"note":"符号，答案=Testing Spring Boot Applications / Test Modules / Testing"}
+{"id":"sym-04","set":"symbol","query":"@ServiceConnection","expectedDocumentIds":[2372,2216],"note":"符号，答案=Testcontainers / Working with NoSQL Technologies"}
+{"id":"sym-05","set":"symbol","query":"@EnableRedisWebSession","expectedDocumentIds":[2390],"note":"符号，答案=Spring Session"}
+{"id":"sym-06","set":"symbol","query":"@AutoConfigureMockMvc","expectedDocumentIds":[2368],"note":"符号，答案=Testing Spring Boot Applications"}
+{"id":"sym-07","set":"symbol","query":"spring.datasource.url","expectedDocumentIds":[2217],"note":"符号，答案=SQL Databases"}
+{"id":"sym-08","set":"symbol","query":"spring.profiles.active","expectedDocumentIds":[2227],"note":"符号，答案=Profiles"}
+{"id":"sym-09","set":"symbol","query":"logging.level","expectedDocumentIds":[2226],"note":"符号，答案=Logging"}
+{"id":"sym-10","set":"symbol","query":"spring.data.redis.host","expectedDocumentIds":[2216],"note":"符号，答案=Working with NoSQL Technologies"}
