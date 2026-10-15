@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>devknow · Agent 流式输出演示</title>
+  <link rel="stylesheet" href="agent-demo.css">
+</head>
+<body>
+  <div class="page">
+
+    <header class="head">
+      <div>
+        <h1>devknow <span class="dim">/ Agent 流式输出</span></h1>
+        <p class="sub">
+          后端 <code>POST /api/agent/chat/stream</code> 用 SSE 推送 6 类事件，
+          下面是边收边渲染的效果。右侧是原始事件流，可以对照看。
+        </p>
+      </div>
+      <div class="status" id="status">
+        <span class="dot" id="status-dot"></span>
+        <span id="status-text">就绪</span>
+      </div>
+    </header>
+
+    <main class="layout">
+
+      <section class="panel chat">
+        <div class="messages" id="messages">
+          <div class="empty" id="empty">
+            <p>试一个能明显看到多步执行的提问：</p>
+            <div class="samples">
+              <button class="sample" type="button">如何配置多个数据源</button>
+              <button class="sample" type="button">@WebMvcTest 应该怎么用</button>
+              <button class="sample" type="button">Logback 升级要注意什么</button>
+            </div>
+          </div>
+        </div>
+
+        <form class="composer" id="composer">
+          <div class="composer-row">
+            <label class="field">
+              <span>agentConfigId</span>
+              <input type="number" id="config-id" value="1" min="1" step="1">
+            </label>
+            <button class="ghost" type="button" id="stop" disabled>停止</button>
+          </div>
+          <textarea id="query" rows="2" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <div class="composer-actions">
+            <span class="hint" id="hint"></span>
+            <button class="primary" type="submit" id="send">发送</button>
+          </div>
+        </form>
+      </section>
+
+      <aside class="panel log-panel">
+        <div class="log-head">
+          <h2>原始事件流</h2>
+          <button class="ghost small" type="button" id="clear-log">清空</button>
+        </div>
+        <div class="legend">
+          <span class="chip step">step</span>
+          <span class="chip delta">delta</span>
+          <span class="chip tool">tool</span>
+          <span class="chip citation">citation</span>
+          <span class="chip done">done</span>
+          <span class="chip error">error</span>
+        </div>
+        <pre class="log" id="log"></pre>
+      </aside>
+
+    </main>
+  </div>
+
+  <script src="agent-demo.js"></script>
+</body>
+</html>
