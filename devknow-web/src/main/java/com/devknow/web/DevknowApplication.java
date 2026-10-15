@@ -1,5 +1,6 @@
 package com.devknow.web;
 
+import com.devknow.agent.config.AgentChatProperties;
 import com.devknow.ingestion.config.DevknowProperties;
 import com.devknow.ingestion.config.GitHubProperties;
 import com.devknow.retrieval.config.EmbeddingProperties;
@@ -25,7 +26,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @MapperScan("com.devknow.domain.mapper")
 @EnableScheduling
 @EnableConfigurationProperties({DevknowProperties.class, GitHubProperties.class,
-        EmbeddingProperties.class, RerankProperties.class})
+        EmbeddingProperties.class, RerankProperties.class, AgentChatProperties.class})
 public class DevknowApplication {
 
     public static void main(String[] args) {

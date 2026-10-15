@@ -45,7 +45,8 @@ public enum ErrorCode {
     // ---- Agent ----
     AGENT_NOT_FOUND(40000, "智能体配置不存在"),
     AGENT_MAX_STEPS_EXCEEDED(40001, "Agent 执行步数超限"),
-    TOOL_EXECUTION_FAILED(40002, "工具执行失败");
+    TOOL_EXECUTION_FAILED(40002, "工具执行失败"),
+    AGENT_LLM_ERROR(40003, "Agent 调用模型失败");
 
     private final int code;
     private final String message;

@@ -114,6 +114,16 @@ devknow:
     candidate-window: 50
     # 送 rerank 的单条截断长度（字符），控制请求体大小
     max-document-chars: 800
+  agent:
+    chat:
+      # 第 5 周 Agent：通过 SiliconFlow 调用 DeepSeek-V3（OpenAI 兼容的 chat 端点）
+      # 绝不硬编码。复用 SILICONFLOW_API_KEY，与向量化/重排序同平台
+      api-key: ${SILICONFLOW_API_KEY:}
+      base-url: https://api.siliconflow.cn/v1
+      model: deepseek-ai/DeepSeek-V3
+      # 生成式模型比 embedding 慢，超时放宽到 60 秒
+      timeout-seconds: 60
+      temperature: 0.20
 
 management:
   endpoints:
