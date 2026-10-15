@@ -138,6 +138,11 @@ logging:
   level:
     root: INFO
     com.devknow: DEBUG
+    # MyBatis 的 SQL 日志连参数一起打，而向量参数的 toString() 是 1024 维字面量
+    # （实测单条约 10 KB）。检索一次就够冲垮日志，每 5 秒的任务轮询再把剩下的埋掉，
+    # 排查时得先 grep 才找得到东西。要临时看 SQL 用命令行参数打开：
+    #   --logging.level.com.devknow.domain.mapper=DEBUG
+    com.devknow.domain.mapper: INFO
     org.eclipse.jgit: WARN
   pattern:
     console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"
