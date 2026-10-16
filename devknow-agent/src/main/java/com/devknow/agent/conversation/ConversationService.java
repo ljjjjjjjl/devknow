@@ -76,7 +76,7 @@ public class ConversationService {
     // ------------------------------------------------------------------
 
     /**
-     * 解析本轮要用的会话 id：传了就用（并校验存在且未删除），没传就新建。
+     * 解析本轮要用的会话 id：传了就用（并校验存在、未删除、归属一致），没传就新建。
      *
      * <p>集中在这里做校验，是为了让 {@link #appendUser} / {@link #appendAssistant}
      * 不必各自再查一次会话 —— 一轮对话会写两次消息，重复校验是纯浪费。
@@ -85,7 +85,14 @@ public class ConversationService {
         if (conversationId == null) {
             return create(agentConfigId, firstQuery);
         }
-        requireActive(conversationId);
+        Conversation c = requireActive(conversationId);
+        // 会话绑定在某个 agent_config 上。换了配置还拿旧 id 续聊，等于用 B 的人设、
+        // B 的工具去跑 A 的历史，结果不可解释。宁可明确报错。
+        if (!c.getAgentConfigId().equals(agentConfigId)) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "会话 " + conversationId + " 属于配置 " + c.getAgentConfigId()
+                            + "，与本次请求的 " + agentConfigId + " 不一致");
+        }
         return conversationId;
     }
 

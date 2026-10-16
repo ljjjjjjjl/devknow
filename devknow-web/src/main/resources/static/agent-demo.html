@@ -11,7 +11,7 @@
 
     <header class="head">
       <h1>devknow <span class="dim">/ Agent 流式输出</span></h1>
-      <p class="sub"><code>POST /api/agent/chat/stream</code> · SSE 6 类事件</p>
+      <p class="sub"><code>POST /api/agent/chat/stream</code> · SSE 7 类事件 · 支持多轮</p>
       <div class="status" id="status">
         <span class="dot" id="status-dot"></span>
         <span id="status-text">就绪</span>
@@ -42,7 +42,11 @@
               <span>agentConfigId</span>
               <input type="number" id="config-id" value="1" min="1" step="1">
             </label>
-            <button class="ghost" type="button" id="stop" disabled>停止</button>
+            <div class="composer-tools">
+              <span class="conv" id="conv" title="当前会话 id，由 start 事件返回">尚未开始</span>
+              <button class="ghost" type="button" id="reset">新会话</button>
+              <button class="ghost" type="button" id="stop" disabled>停止</button>
+            </div>
           </div>
           <textarea id="query" rows="2" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
           <div class="composer-actions">
@@ -72,6 +76,7 @@
             <button class="ghost small" type="button" id="clear-log">清空</button>
           </div>
           <div class="legend">
+            <span class="chip start">start</span>
             <span class="chip step">step</span>
             <span class="chip delta">delta</span>
             <span class="chip tool">tool</span>

@@ -229,6 +229,20 @@ code { font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
 
 .composer { flex: none; border-top: 1px solid var(--line); padding: 12px 14px 14px; background: #12171e; }
 .composer-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+.composer-tools { display: flex; align-items: center; gap: 10px; }
+
+/* 会话指示：start 事件返回的 conversationId。
+   做成药丸 + 等宽字体，和旁边的按钮区分开 —— 它是"状态"不是"操作" */
+.conv {
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.conv.active { color: var(--text); border-color: var(--dim); }
 
 .field { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
 .field input {
@@ -328,6 +342,7 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
   border: 1px solid var(--line);
 }
 
+.chip.start { color: var(--dim); }
 .chip.step { color: var(--accent); }
 .chip.delta { color: var(--ok); }
 .chip.tool { color: var(--warn); }
@@ -349,6 +364,7 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
   word-break: break-all;
 }
 
+.log .e-start { color: var(--dim); }
 .log .e-step { color: var(--accent); }
 .log .e-delta { color: var(--ok); }
 .log .e-tool { color: var(--warn); }

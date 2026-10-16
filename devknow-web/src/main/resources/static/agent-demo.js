@@ -4,6 +4,9 @@
  * 为什么不用 EventSource：它只支持 GET，而 agentConfigId + query 要走请求体。
  * 所以用 fetch + ReadableStream 手动解析 SSE —— 顺带把"SSE 就是一段
  * text/event-stream 的纯文本"这件事显式地写出来，而不是藏在浏览器里。
+ *
+ * 多轮：第一轮不带 conversationId，后端新建会话后用 start 事件把 id 推回来；
+ * 之后每一轮都带上它，服务端据此恢复上下文。点"新会话"清空 id 重新开始。
  */
 
 (() => {
@@ -23,6 +26,8 @@
     configId: document.getElementById('config-id'),
     send: document.getElementById('send'),
     stop: document.getElementById('stop'),
+    reset: document.getElementById('reset'),
+    conv: document.getElementById('conv'),
     jump: document.getElementById('jump'),
     hint: document.getElementById('hint'),
     cites: document.getElementById('cites'),
@@ -36,6 +41,7 @@
 
   let controller = null;   // 当前请求的 AbortController
   let streaming = false;
+  let conversationId = null; // null = 下一轮会新建会话
   let logTotal = 0;        // 累计事件数（日志本身只留最近 LOG_LIMIT 条）
   let deltaLine = null;    // 本次回答的 delta 汇总行，null 表示还没开始
   let deltaCount = 0;
@@ -104,6 +110,8 @@
     el.logCount.textContent = '0';
   });
 
+  el.reset.addEventListener('click', newConversation);
+
   el.empty.addEventListener('click', (e) => {
     if (e.target.classList.contains('sample')) {
       el.query.value = e.target.textContent;
@@ -128,6 +136,37 @@
     run(agentConfigId, query);
   }
 
+  /**
+   * 开一个新会话：清掉 conversationId 与消息区。
+   *
+   * 消息区要连 #empty 一起恢复 —— 它在第一次提问时被移除了，
+   * 而示例按钮的点击是委托在 #empty 上的，所以直接把原节点挂回去最省事。
+   */
+  function newConversation() {
+    if (streaming) {
+      setHint('先等这一条结束，或点"停止"');
+      return;
+    }
+    conversationId = null;
+    updateConv();
+
+    el.messages.textContent = '';
+    el.messages.appendChild(el.empty);
+    el.cites.textContent = '';
+    el.citeCount.textContent = '0';
+    el.query.value = '';
+
+    setStatus('idle', '就绪');
+    setHint('已开新会话，下一句会新建一个');
+    updateJump();
+  }
+
+  function updateConv() {
+    const active = conversationId !== null;
+    el.conv.textContent = active ? `会话 #${conversationId}` : '尚未开始';
+    el.conv.classList.toggle('active', active);
+  }
+
   // ---------------------------------------------------------------- 主流程
 
   async function run(agentConfigId, query) {
@@ -147,11 +186,18 @@
     const startedAt = performance.now();
     controller = new AbortController();
 
+    // 有会话就带上，让服务端恢复上下文；null 时整个字段不发，
+    // 后端按"新建会话"处理（显式传 null 也可以，但少个字段更干净）
+    const payload = { agentConfigId, query };
+    if (conversationId !== null) {
+      payload.conversationId = conversationId;
+    }
+
     try {
       const resp = await fetch(API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentConfigId, query }),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
 
@@ -249,6 +295,12 @@
     const stick = isNearBottom();
 
     switch (event) {
+      case 'start':
+        // 会话 id 到手。第一轮之后每轮都带上它，追问才能接上上下文
+        conversationId = data.conversationId;
+        updateConv();
+        break;
+
       case 'step':
         state.steps = data.step;
         setStepBadge(card, `第 ${data.step} 步`);

@@ -1,14 +1,24 @@
 package com.devknow.agent.conversation;
 
 import com.devknow.agent.client.ChatMessage;
+import com.devknow.common.api.ErrorCode;
+import com.devknow.common.exception.BizException;
 import com.devknow.common.util.TokenEstimator;
+import com.devknow.domain.entity.Conversation;
 import com.devknow.domain.entity.ConversationMessage;
+import com.devknow.domain.enums.ConversationEnums.ConversationStatus;
+import com.devknow.domain.mapper.ConversationMapper;
+import com.devknow.domain.mapper.ConversationMessageMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * 上下文裁剪的边界测试。
@@ -105,6 +115,71 @@ class ConversationServiceTest {
         String title = ConversationService.buildTitle(chinese(100));
         assertThat(title).hasSize(61);
         assertThat(title).endsWith("…");
+    }
+
+    // ------------------------------------------------------------------
+    // 会话归属校验
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("没传 conversationId：新建会话并返回新 id")
+    void resolveCreatesWhenAbsent() {
+        ConversationMapper conversations = mock(ConversationMapper.class);
+        when(conversations.insert(any(Conversation.class))).thenAnswer(invocation -> {
+            Conversation c = invocation.getArgument(0);
+            c.setId(42L);
+            return 1;
+        });
+        ConversationService service =
+                new ConversationService(conversations, mock(ConversationMessageMapper.class));
+
+        assertThat(service.resolve(1L, null, "怎么配置数据源")).isEqualTo(42L);
+    }
+
+    @Test
+    @DisplayName("传了且归属一致：复用同一个 id")
+    void resolveReusesWhenOwnershipMatches() {
+        assertThat(serviceWith(active(7L, 1L)).resolve(1L, 7L, "问题")).isEqualTo(7L);
+    }
+
+    @Test
+    @DisplayName("传了但属于别的配置：报 BAD_REQUEST，不能拿 B 的人设跑 A 的历史")
+    void resolveRejectsForeignConversation() {
+        ConversationService service = serviceWith(active(7L, 1L));
+
+        assertThatThrownBy(() -> service.resolve(2L, 7L, "问题"))
+                .isInstanceOf(BizException.class)
+                .extracting(e -> ((BizException) e).getErrorCode())
+                .isEqualTo(ErrorCode.BAD_REQUEST);
+    }
+
+    @Test
+    @DisplayName("传了但会话已软删：报 CONVERSATION_NOT_FOUND")
+    void resolveRejectsDeletedConversation() {
+        Conversation deleted = active(7L, 1L);
+        deleted.setStatus(ConversationStatus.DELETED.getValue());
+        ConversationService service = serviceWith(deleted);
+
+        assertThatThrownBy(() -> service.resolve(1L, 7L, "问题"))
+                .isInstanceOf(BizException.class)
+                .extracting(e -> ((BizException) e).getErrorCode())
+                .isEqualTo(ErrorCode.CONVERSATION_NOT_FOUND);
+    }
+
+    // ------------------------------------------------------------------
+
+    private static ConversationService serviceWith(Conversation c) {
+        ConversationMapper conversations = mock(ConversationMapper.class);
+        when(conversations.selectById(c.getId())).thenReturn(c);
+        return new ConversationService(conversations, mock(ConversationMessageMapper.class));
+    }
+
+    private static Conversation active(long id, long agentConfigId) {
+        Conversation c = new Conversation();
+        c.setId(id);
+        c.setAgentConfigId(agentConfigId);
+        c.setStatus(ConversationStatus.ACTIVE.getValue());
+        return c;
     }
 
     // ------------------------------------------------------------------
