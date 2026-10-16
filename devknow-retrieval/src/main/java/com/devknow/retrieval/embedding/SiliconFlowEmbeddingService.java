@@ -3,6 +3,7 @@ package com.devknow.retrieval.embedding;
 import com.devknow.common.api.ErrorCode;
 import com.devknow.common.embedding.EmbeddingService;
 import com.devknow.common.exception.BizException;
+import com.devknow.common.util.TokenEstimator;
 import com.devknow.retrieval.config.EmbeddingProperties;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -256,21 +257,14 @@ public class SiliconFlowEmbeddingService implements EmbeddingService {
     }
 
     /**
-     * 与 {@code HeadingChunker.estimateTokens} 相同的启发式：中文 1 token、其他 4 字符 1 token。
+     * 估算 token 数，委托给 {@link TokenEstimator}。
      *
-     * <p><b>这份是本地副本，两处必须同步修改。</b>
-     * {@code HeadingChunker} 里的同名方法是包级可见的，跨模块调不到。
-     * 若两处口径漂移，"切分批大小"与"chunk 大小上界"会用两套标准衡量同一件事。
+     * <p>原先这里是 {@code HeadingChunker.estimateTokens} 的本地副本（跨模块调不到
+     * 包级方法），注释里写着"两处必须同步修改"。会话持久化会让它变三份，
+     * 所以实现统一上收到 {@code devknow-common}；保留这个方法只是不动既有调用点。
      */
     static int estimateTokens(String text) {
-        int cjk = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c >= 0x4E00 && c <= 0x9FFF) {
-                cjk++;
-            }
-        }
-        return cjk + (text.length() - cjk) / 4;
+        return TokenEstimator.estimate(text);
     }
 
     // ------------------------------------------------------------------

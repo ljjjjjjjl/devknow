@@ -65,12 +65,16 @@ public class ChatClient {
      * @param temperature 温度
      * @param messages    完整历史消息
      * @param tools       OpenAI tools 数组；空列表时模型只能直接回答，不能调工具
+     * @param requireToolCall 为 true 时下发 {@code tool_choice: "required"}，<b>强制</b>本回合
+     *                    必须调用工具。ReAct 循环用它保证第一步一定发生检索，见
+     *                    {@code AgentRunner} 的说明
      */
     public AssistantTurn chat(String model, double temperature,
-                              List<ChatMessage> messages, List<Map<String, Object>> tools) {
+                              List<ChatMessage> messages, List<Map<String, Object>> tools,
+                              boolean requireToolCall) {
         requireConfigured();
 
-        Map<String, Object> body = buildBody(model, temperature, messages, tools, false);
+        Map<String, Object> body = buildBody(model, temperature, messages, tools, false, requireToolCall);
         log.debug("调用模型: model={}, messages={} 条, tools={} 个",
                 model, messages.size(), tools == null ? 0 : tools.size());
 
@@ -103,13 +107,15 @@ public class ChatClient {
      * {@code function.name}，后续分片只往 {@code function.arguments} 上追加字符串。
      * 按 {@code index} 归并是唯一正确的做法 —— 一次响应可能有多个工具调用，
      * 它们的分片是交错的。
+     *
+     * @param requireToolCall 见 {@link #chat}，语义一致
      */
     public AssistantTurn streamChat(String model, double temperature,
                                     List<ChatMessage> messages, List<Map<String, Object>> tools,
-                                    Consumer<String> onDelta) {
+                                    Consumer<String> onDelta, boolean requireToolCall) {
         requireConfigured();
 
-        Map<String, Object> body = buildBody(model, temperature, messages, tools, true);
+        Map<String, Object> body = buildBody(model, temperature, messages, tools, true, requireToolCall);
         log.debug("流式调用模型: model={}, messages={} 条, tools={} 个",
                 model, messages.size(), tools == null ? 0 : tools.size());
 
@@ -162,7 +168,7 @@ public class ChatClient {
 
     private Map<String, Object> buildBody(String model, double temperature,
                                           List<ChatMessage> messages, List<Map<String, Object>> tools,
-                                          boolean stream) {
+                                          boolean stream, boolean requireToolCall) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model);
         body.put("messages", messages.stream().map(ChatMessage::toMap).toList());
@@ -170,8 +176,10 @@ public class ChatClient {
         body.put("stream", stream);
         if (tools != null && !tools.isEmpty()) {
             body.put("tools", tools);
-            // 显式 auto：部分模型在缺省 tool_choice 时不会主动调用工具
-            body.put("tool_choice", "auto");
+            // 显式 auto：部分模型在缺省 tool_choice 时不会主动调用工具。
+            // required：强制本回合必须调工具，用于 ReAct 的第一步 —— 详见 AgentRunner。
+            // 实测 SiliconFlow 的 DeepSeek-V3 支持 required（会返回 content="" + tool_calls）。
+            body.put("tool_choice", requireToolCall ? "required" : "auto");
         }
         return body;
     }

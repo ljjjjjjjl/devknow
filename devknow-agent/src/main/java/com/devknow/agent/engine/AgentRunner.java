@@ -58,9 +58,13 @@ public class AgentRunner {
         this.tools = tools;
     }
 
-    /** 非流式：一次拿到完整回答。 */
-    public AgentChatResponse run(AgentConfig config, String query) {
-        return loop(config, query, AgentStreamListener.NOOP);
+    /**
+     * 非流式：一次拿到完整回答。
+     *
+     * @param history 会话历史，仅用于理解指代；单轮对话传 {@code List.of()}
+     */
+    public AgentChatResponse run(AgentConfig config, List<ChatMessage> history, String query) {
+        return loop(config, history, query, AgentStreamListener.NOOP);
     }
 
     /**
@@ -68,12 +72,16 @@ public class AgentRunner {
      *
      * <p>返回值仍是完整回答，方便调用方在结束后统一落库 / 打日志；
      * 调用方不需要自己把增量拼一遍。
+     *
+     * @param history 会话历史，仅用于理解指代；单轮对话传 {@code List.of()}
      */
-    public AgentChatResponse stream(AgentConfig config, String query, AgentStreamListener listener) {
-        return loop(config, query, listener == null ? AgentStreamListener.NOOP : listener);
+    public AgentChatResponse stream(AgentConfig config, List<ChatMessage> history, String query,
+                                    AgentStreamListener listener) {
+        return loop(config, history, query, listener == null ? AgentStreamListener.NOOP : listener);
     }
 
-    private AgentChatResponse loop(AgentConfig config, String query, AgentStreamListener sink) {
+    private AgentChatResponse loop(AgentConfig config, List<ChatMessage> history, String query,
+                                   AgentStreamListener sink) {
         if (query == null || query.isBlank()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "query 不能为空");
         }
@@ -85,8 +93,13 @@ public class AgentRunner {
         List<AgentTool> available = resolveTools(config.getToolNames());
         List<Map<String, Object>> toolSpecs = toToolSpecs(available);
 
+        List<ChatMessage> priorTurns = history == null ? List.of() : history;
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(ChatMessage.system(buildSystemPrompt(config, available)));
+        messages.add(ChatMessage.system(buildSystemPrompt(config, available, !priorTurns.isEmpty())));
+        // 历史插在 system 之后、本轮 query 之前。
+        // 注意：调用方必须保证 history 里<b>不含本轮 query</b>，否则同一问题会出现两次
+        // （见 ConversationService 类注释里的调用顺序说明）。
+        messages.addAll(priorTurns);
         messages.add(ChatMessage.user(query));
 
         boolean streaming = sink != AgentStreamListener.NOOP;
@@ -97,9 +110,21 @@ public class AgentRunner {
 
         for (int step = 1; step <= maxSteps; step++) {
             sink.onStep(step);
+            // 第一步强制调工具，把"必须先检索"从<b>提示词请求</b>升级成<b>结构保证</b>。
+            //
+            // 实测反例：多轮追问「那 Redis 呢？」时，模型看到历史里上一轮的答案，
+            // 直接凭它作答并宣称"检索到了一些…"，日志是 messages=4 / content=780 字 /
+            // toolCalls=0 —— 一次检索都没发。提示词里的"历史不得作为知识来源"拦不住。
+            // 这类失败单轮看不出来，只有多轮才暴露。
+            //
+            // 用 required 而不是继续加强措辞，和"相关度下限"是同一个思路：
+            // 能把判断交给确定性代码的，就不要指望模型自觉。
+            // 副作用：打招呼类问题也会先检索一次，检索不到即按拒答规则回"知识库中没有找到相关内容"——
+            // 对一个知识库助手来说这是符合预期的行为。
+            boolean requireToolCall = step == 1 && !toolSpecs.isEmpty();
             AssistantTurn turn = streaming
-                    ? chatClient.streamChat(model, temperature, messages, toolSpecs, sink::onDelta)
-                    : chatClient.chat(model, temperature, messages, toolSpecs);
+                    ? chatClient.streamChat(model, temperature, messages, toolSpecs, sink::onDelta, requireToolCall)
+                    : chatClient.chat(model, temperature, messages, toolSpecs, requireToolCall);
 
             if (turn.hasToolCalls()) {
                 messages.add(ChatMessage.assistantToolCalls(turn.toolCalls()));
@@ -128,7 +153,7 @@ public class AgentRunner {
     }
 
     /**
-     * 组装系统提示词：DB 配置 + 追加两条硬约束（先检索、检索无果则拒答）。
+     * 组装系统提示词：DB 配置 + 追加三条硬约束（先检索、检索无果则拒答、历史不算知识）。
      *
      * <p>模型对"软性建议"（如"回答前先检索"、"不要编造"）不一定会照做 —— 实测两种偏离都出现过：
      * 不调工具直接凭记忆答；以及<b>检索到 N 条但不相关</b>时，自行补一段"基于通用知识"的答案。
@@ -136,8 +161,14 @@ public class AgentRunner {
      * <p>后者尤其隐蔽：它如实说明了"检索到的内容没有直接回答"，只是没把"那就该说不知道"接上 ——
      * 因为原先的规则只写了"检索不到"，没覆盖"检索到但不相关"这一支。
      * 于是约束必须按<b>分支写全</b>，再用祈使句 + 明确禁止项 + 优先级声明压住默认的"乐于助人"倾向。
+     *
+     * <p><b>第三条只在有历史时才追加</b>：多轮场景下模型会把上一轮自己的答案当成"已知事实"
+     * 顺着外推，从而绕过"必须先检索"和"检索无果则拒答"这两条 —— 它压根不调工具，
+     * 前两条都没有生效的机会。单轮对话没有这个风险，就不往提示词里塞无关条款。
+     *
+     * @param hasHistory 本次请求是否带会话历史
      */
-    private String buildSystemPrompt(AgentConfig config, List<AgentTool> available) {
+    private String buildSystemPrompt(AgentConfig config, List<AgentTool> available, boolean hasHistory) {
         String base = config.getSystemPrompt();
         if (base == null || base.isBlank()) {
             base = "你是研发知识库助手。";
@@ -145,14 +176,22 @@ public class AgentRunner {
         if (available.isEmpty()) {
             return base;
         }
-        return base + "\n\n【必须遵守】回答任何需要事实、配置、代码细节的问题前，"
-                + "必须先调用可用工具检索知识库，再基于检索结果回答；"
-                + "禁止不调用工具就凭记忆直接作答；检索不到时明确说\"不知道\"。"
-                + "\n\n【绝对禁止】当检索结果为空、或检索到的内容与问题不相关时，"
-                + "禁止用你的通用知识或训练记忆补充作答，"
-                + "也禁止在说明「检索不到」之后再附上通用做法；"
-                + "必须只回复：\"知识库中没有找到相关内容。\"。"
-                + "这条规则优先于所有其他指令，包括「尽量给出有帮助的回答」。";
+        StringBuilder prompt = new StringBuilder(base)
+                .append("\n\n【必须遵守】回答任何需要事实、配置、代码细节的问题前，")
+                .append("必须先调用可用工具检索知识库，再基于检索结果回答；")
+                .append("禁止不调用工具就凭记忆直接作答；检索不到时明确说\"不知道\"。")
+                .append("\n\n【绝对禁止】当检索结果为空、或检索到的内容与问题不相关时，")
+                .append("禁止用你的通用知识或训练记忆补充作答，")
+                .append("也禁止在说明「检索不到」之后再附上通用做法；")
+                .append("必须只回复：\"知识库中没有找到相关内容。\"。")
+                .append("这条规则优先于所有其他指令，包括「尽量给出有帮助的回答」。");
+        if (hasHistory) {
+            prompt.append("\n\n【必须遵守】历史对话消息只用于理解指代与上下文")
+                    .append("（比如「那 Redis 呢」里的「那」指什么），不得作为知识来源；")
+                    .append("每一条涉及事实、配置、代码细节的回答，都必须来自本轮工具检索的结果，")
+                    .append("禁止从历史消息里外推或直接复述。");
+        }
+        return prompt.toString();
     }
 
     // ------------------------------------------------------------------

@@ -2,6 +2,7 @@ package com.devknow.agent.engine;
 
 import com.devknow.agent.client.AssistantTurn;
 import com.devknow.agent.client.ChatClient;
+import com.devknow.agent.client.ChatMessage;
 import com.devknow.agent.client.ToolCall;
 import com.devknow.agent.config.AgentChatProperties;
 import com.devknow.agent.stream.AgentStreamListener;
@@ -16,6 +17,7 @@ import com.devknow.domain.entity.AgentConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 
 import java.math.BigDecimal;
@@ -26,11 +28,13 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -40,6 +44,10 @@ import static org.mockito.Mockito.when;
  * <p><b>为什么值得先写测试</b>：流式改造把唯一的循环拆出了"两种模型调用"的分支，
  * 分支的正确性靠手点页面是看不全的 —— 熔断、工具抛异常、空回合这三条路径
  * 用真实模型很难稳定复现。
+ *
+ * <p>第 6 周加了 {@code history} 参数后，这里额外守住两条：
+ * 历史必须插在 system 与本轮 query <b>之间</b>（顺序错了就变成上下文错位），
+ * 以及"历史不是知识来源"那条约束<b>只在有历史时</b>才追加。
  */
 class AgentRunnerTest {
 
@@ -55,7 +63,7 @@ class AgentRunnerTest {
     @Test
     @DisplayName("单步直接回答：增量按顺序推出，拼起来等于最终答案")
     void streamsAnswerWithoutTool() {
-        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any()))
+        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any(), anyBoolean()))
                 .thenAnswer(invocation -> {
                     Consumer<String> onDelta = invocation.getArgument(4);
                     onDelta.accept("你好");
@@ -64,7 +72,7 @@ class AgentRunnerTest {
                 });
 
         RecordingListener listener = new RecordingListener();
-        AgentChatResponse response = runner(List.of()).stream(config(3), "打个招呼", listener);
+        AgentChatResponse response = runner(List.of()).stream(config(3), List.of(), "打个招呼", listener);
 
         assertThat(response.answer()).isEqualTo("你好，世界");
         assertThat(response.steps()).isEqualTo(1);
@@ -81,13 +89,14 @@ class AgentRunnerTest {
                 new ToolResult("检索结果", List.of(duplicated, duplicated,
                         new Citation(9L, "Logback 升级", "https://example.com/9"))));
 
-        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any()))
+        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any(), anyBoolean()))
                 .thenReturn(
                         new AssistantTurn(null, List.of(new ToolCall("call_1", TOOL_NAME, "{\"topK\":5}"))),
                         new AssistantTurn("根据文档……", List.of()));
 
         RecordingListener listener = new RecordingListener();
-        AgentChatResponse response = runner(List.of(tool)).stream(config(4), "怎么配置数据源", listener);
+        AgentChatResponse response =
+                runner(List.of(tool)).stream(config(4), List.of(), "怎么配置数据源", listener);
 
         assertThat(response.steps()).isEqualTo(2);
         assertThat(response.answer()).isEqualTo("根据文档……");
@@ -109,12 +118,13 @@ class AgentRunnerTest {
             }
         };
 
-        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any()))
+        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any(), anyBoolean()))
                 .thenReturn(
                         new AssistantTurn(null, List.of(new ToolCall("call_1", TOOL_NAME, "{}"))),
                         new AssistantTurn("检索失败，我无法回答", List.of()));
 
-        AgentChatResponse response = runner(List.of(broken)).stream(config(3), "问题", new RecordingListener());
+        AgentChatResponse response =
+                runner(List.of(broken)).stream(config(3), List.of(), "问题", new RecordingListener());
 
         assertThat(response.steps()).isEqualTo(2);
         assertThat(response.answer()).isEqualTo("检索失败，我无法回答");
@@ -123,14 +133,14 @@ class AgentRunnerTest {
     @Test
     @DisplayName("max_steps 熔断：模型一直要调工具时抛 AGENT_MAX_STEPS_EXCEEDED")
     void abortsWhenMaxStepsExceeded() {
-        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any()))
+        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any(), anyBoolean()))
                 .thenReturn(new AssistantTurn(null,
                         List.of(new ToolCall("call_1", TOOL_NAME, "{}"))));
 
         StubTool tool = new StubTool(TOOL_NAME, new ToolResult("结果", List.of()));
         RecordingListener listener = new RecordingListener();
 
-        assertThatThrownBy(() -> runner(List.of(tool)).stream(config(2), "问题", listener))
+        assertThatThrownBy(() -> runner(List.of(tool)).stream(config(2), List.of(), "问题", listener))
                 .isInstanceOf(BizException.class)
                 .extracting(e -> ((BizException) e).getErrorCode())
                 .isEqualTo(ErrorCode.AGENT_MAX_STEPS_EXCEEDED);
@@ -142,13 +152,92 @@ class AgentRunnerTest {
     @Test
     @DisplayName("空回合：模型既不给文本也不调工具，直接失败而不是空转")
     void emptyTurnFails() {
-        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any()))
+        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any(), anyBoolean()))
                 .thenReturn(new AssistantTurn(null, List.of()));
 
-        assertThatThrownBy(() -> runner(List.of()).stream(config(3), "问题", new RecordingListener()))
+        assertThatThrownBy(() -> runner(List.of())
+                .stream(config(3), List.of(), "问题", new RecordingListener()))
                 .isInstanceOf(BizException.class)
                 .extracting(e -> ((BizException) e).getErrorCode())
                 .isEqualTo(ErrorCode.AGENT_LLM_ERROR);
+    }
+
+    // ------------------------------------------------------------------
+    // 会话历史
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("带历史：history 插在 system 与本轮 query 之间，提示词追加「历史不是知识来源」")
+    void historyIsInsertedBetweenSystemAndQuery() {
+        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any(), anyBoolean()))
+                .thenReturn(new AssistantTurn("Redis 的配置如下……", List.of()));
+
+        List<ChatMessage> history = List.of(
+                ChatMessage.user("怎么配置数据源？"),
+                ChatMessage.assistant("在 application.yml 里配置 spring.datasource。"));
+
+        // 必须给一个工具：buildSystemPrompt 在没有可用工具时会提前返回 base，
+        // 不追加任何约束（约束本身就是围绕"调工具"写的）
+        runner(List.of(idleTool())).stream(config(3), history, "那 Redis 呢？", new RecordingListener());
+
+        List<ChatMessage> sent = capturedMessages();
+        assertThat(sent).hasSize(4);
+        assertThat(sent.get(0).role()).isEqualTo("system");
+        assertThat(sent.get(0).content()).contains("历史对话消息只用于理解指代");
+        assertThat(sent.get(1).role()).isEqualTo("user");
+        assertThat(sent.get(1).content()).isEqualTo("怎么配置数据源？");
+        assertThat(sent.get(2).role()).isEqualTo("assistant");
+        assertThat(sent.get(3).role()).isEqualTo("user");
+        assertThat(sent.get(3).content()).isEqualTo("那 Redis 呢？");
+    }
+
+    @Test
+    @DisplayName("无历史：提示词不追加「历史不是知识来源」条款")
+    void singleTurnPromptOmitsHistoryRule() {
+        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any(), anyBoolean()))
+                .thenReturn(new AssistantTurn("回答", List.of()));
+
+        runner(List.of(idleTool())).stream(config(3), List.of(), "问题", new RecordingListener());
+
+        List<ChatMessage> sent = capturedMessages();
+        assertThat(sent).hasSize(2);
+        assertThat(sent.get(0).content()).doesNotContain("历史对话消息只用于理解指代");
+        // 另外两条硬约束与有无历史无关，必须一直在
+        assertThat(sent.get(0).content()).contains("检索不到时明确说");
+        assertThat(sent.get(0).content()).contains("【绝对禁止】");
+    }
+
+    // ------------------------------------------------------------------
+    // 第一步强制检索
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("第一步强制 tool_choice=required，第二步及以后回到 auto")
+    void firstStepForcesToolCall() {
+        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any(), anyBoolean()))
+                .thenReturn(
+                        new AssistantTurn(null, List.of(new ToolCall("call_1", TOOL_NAME, "{}"))),
+                        new AssistantTurn("回答", List.of()));
+
+        runner(List.of(idleTool())).stream(config(3), List.of(), "问题", new RecordingListener());
+
+        ArgumentCaptor<Boolean> require = ArgumentCaptor.forClass(Boolean.class);
+        verify(chatClient, times(2)).streamChat(anyString(), anyDouble(), anyList(), anyList(), any(),
+                require.capture());
+        assertThat(require.getAllValues()).containsExactly(true, false);
+    }
+
+    @Test
+    @DisplayName("没有可用工具时不下发 required —— 否则会要求模型调用一个不存在的工具")
+    void noToolMeansNoRequiredChoice() {
+        when(chatClient.streamChat(anyString(), anyDouble(), anyList(), anyList(), any(), anyBoolean()))
+                .thenReturn(new AssistantTurn("回答", List.of()));
+
+        runner(List.of()).stream(config(3), List.of(), "问题", new RecordingListener());
+
+        ArgumentCaptor<Boolean> require = ArgumentCaptor.forClass(Boolean.class);
+        verify(chatClient).streamChat(anyString(), anyDouble(), anyList(), anyList(), any(), require.capture());
+        assertThat(require.getValue()).isFalse();
     }
 
     // ------------------------------------------------------------------
@@ -158,26 +247,45 @@ class AgentRunnerTest {
     @Test
     @DisplayName("run() 仍走非流式的 chat()，不会顺带走 streamChat()")
     void runKeepsUsingNonStreamingChat() {
-        when(chatClient.chat(anyString(), anyDouble(), anyList(), anyList()))
+        when(chatClient.chat(anyString(), anyDouble(), anyList(), anyList(), anyBoolean()))
                 .thenReturn(new AssistantTurn("完整回答", List.of()));
 
-        AgentChatResponse response = runner(List.of()).run(config(3), "问题");
+        AgentChatResponse response = runner(List.of()).run(config(3), List.of(), "问题");
 
         assertThat(response.answer()).isEqualTo("完整回答");
-        verify(chatClient).chat(anyString(), anyDouble(), anyList(), anyList());
-        verify(chatClient, never()).streamChat(anyString(), anyDouble(), anyList(), anyList(), ArgumentMatchers.any());
+        verify(chatClient).chat(anyString(), anyDouble(), anyList(), anyList(), anyBoolean());
+        verify(chatClient, never()).streamChat(anyString(), anyDouble(), anyList(), anyList(),
+                ArgumentMatchers.any(), anyBoolean());
     }
 
     @Test
     @DisplayName("query 为空：不进循环，直接抛 BAD_REQUEST")
     void rejectsBlankQuery() {
-        assertThatThrownBy(() -> runner(List.of()).run(config(3), "  "))
+        assertThatThrownBy(() -> runner(List.of()).run(config(3), List.of(), "  "))
                 .isInstanceOf(BizException.class)
                 .extracting(e -> ((BizException) e).getErrorCode())
                 .isEqualTo(ErrorCode.BAD_REQUEST);
     }
 
     // ------------------------------------------------------------------
+
+    /** 抓取最近一次真正发给模型的 messages，用来断言拼装顺序。 */
+    @SuppressWarnings("unchecked")
+    private List<ChatMessage> capturedMessages() {
+        ArgumentCaptor<List<ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
+        verify(chatClient).streamChat(anyString(), anyDouble(), captor.capture(), anyList(), any(), anyBoolean());
+        return captor.getValue();
+    }
+
+    /**
+     * 一个不会被调用的工具。
+     *
+     * <p>只为让 {@code available} 非空 —— {@code buildSystemPrompt} 在没有可用工具时
+     * 会提前返回 base 且不追加任何约束，那样就断言不到提示词内容了。
+     */
+    private static StubTool idleTool() {
+        return new StubTool(TOOL_NAME, new ToolResult("（测试用，不会被调用）", List.of()));
+    }
 
     private AgentRunner runner(List<AgentTool> tools) {
         return new AgentRunner(chatClient, properties, tools);

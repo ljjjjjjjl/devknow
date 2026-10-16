@@ -1,5 +1,6 @@
 package com.devknow.ingestion.chunker;
 
+import com.devknow.common.util.TokenEstimator;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayDeque;
@@ -528,19 +529,14 @@ public class HeadingChunker {
     }
 
     /**
-     * 估算 token 数。
+     * 估算 token 数，委托给 {@link TokenEstimator}。
      *
-     * <p>用"中文字符 1 token、其他 4 字符 1 token"的启发式，而不是引入 tiktoken 之类
-     * 的依赖：这里只需要量级正确（用于控制上下文预算），不需要精确。
+     * <p>保留这个包级方法只是为了不动既有调用点与测试；实现已经上收到
+     * {@code devknow-common}，与向量化批大小、会话上下文预算共用同一口径。
+     * 原先这里和 {@code SiliconFlowEmbeddingService} 各有一份副本，注释里写着
+     * "两处必须同步修改" —— 会话持久化会让它变三份，所以统一收口。
      */
     static int estimateTokens(String text) {
-        int cjk = 0;
-        for (int i = 0; i < text.length(); i++) {
-            if (text.charAt(i) >= 0x4E00 && text.charAt(i) <= 0x9FFF) {
-                cjk++;
-            }
-        }
-        int other = text.length() - cjk;
-        return cjk + other / 4;
+        return TokenEstimator.estimate(text);
     }
 }

@@ -23,6 +23,17 @@ public record ChatMessage(String role, String content, List<ToolCall> toolCalls,
         return new ChatMessage("user", content, null, null);
     }
 
+    /**
+     * 纯文本 assistant 回合。
+     *
+     * <p>主要用于<b>回放历史</b>：会话持久化里存下来的 assistant 消息只有正文
+     * （tool 往返刻意不落库），所以重建上下文时走这个工厂而不是
+     * {@link #assistantToolCalls}。
+     */
+    public static ChatMessage assistant(String content) {
+        return new ChatMessage("assistant", content, null, null);
+    }
+
     public static ChatMessage assistantToolCalls(List<ToolCall> toolCalls) {
         return new ChatMessage("assistant", null, toolCalls, null);
     }
