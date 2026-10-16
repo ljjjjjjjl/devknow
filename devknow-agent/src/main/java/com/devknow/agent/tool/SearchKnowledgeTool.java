@@ -4,6 +4,7 @@ import com.devknow.common.util.JsonUtils;
 import com.devknow.domain.dto.Citation;
 import com.devknow.domain.dto.SearchResult;
 import com.devknow.retrieval.RetrievalService;
+import com.devknow.retrieval.rerank.RerankProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
@@ -19,6 +20,10 @@ import java.util.Set;
  *
  * <p>单条结果正文截断到 {@value #MAX_CONTENT_CHARS} 字符 —— 检索出的 chunk 最长 4000 字符，
  * 不截断会让一次 ReAct 的上下文迅速打爆，相关度信号又集中在标题与开头。
+ *
+ * <p><b>低于 {@code devknow.rerank.min-relevance-score} 的结果按 0 命中处理。</b>
+ * 理由见 {@link RerankProperties#getMinRelevanceScore()}：把"相不相关"的判断从模型手里
+ * 拿回确定性代码，好让模型只面对"有结果 / 没结果"两分支，而这两支提示词都写了规则。
  */
 @Slf4j
 @Component
@@ -41,9 +46,11 @@ public class SearchKnowledgeTool implements AgentTool {
     private static final JsonNode SCHEMA_NODE = parseSchema();
 
     private final RetrievalService retrievalService;
+    private final RerankProperties rerankProperties;
 
-    public SearchKnowledgeTool(RetrievalService retrievalService) {
+    public SearchKnowledgeTool(RetrievalService retrievalService, RerankProperties rerankProperties) {
         this.retrievalService = retrievalService;
+        this.rerankProperties = rerankProperties;
     }
 
     @Override
@@ -70,8 +77,19 @@ public class SearchKnowledgeTool implements AgentTool {
         int topK = arguments.path("topK").asInt(DEFAULT_TOP_K);
 
         List<SearchResult> results = retrievalService.search(query, topK);
-        if (results.isEmpty()) {
-            return new ToolResult("未检索到相关内容", List.of());
+
+        // top-1 精排分。rerank 关闭、或降级退回 RRF 时为 null —— 那时没有可信的相关度信号，
+        // 不能拿 null 去比阈值，否则会把全部结果误判成不相关。
+        Double topScore = results.isEmpty() ? null : results.get(0).rerankScore();
+        double minScore = rerankProperties.getMinRelevanceScore();
+        boolean belowFloor = topScore != null && topScore < minScore;
+
+        if (results.isEmpty() || belowFloor) {
+            // 无结果的分支也必须打日志。少了它，事后翻日志分不清"没命中"和"压根没调用工具"，
+            // 而这两种情况的排查方向完全相反（改检索 vs 改提示词）。
+            log.info("search_knowledge: query={}, 命中 {} 条, top1={}, 判定为不相关（阈值 {}）",
+                    query, results.size(), topScore, minScore);
+            return ToolResult.empty("未检索到相关内容");
         }
 
         StringBuilder text = new StringBuilder("检索到 ").append(results.size()).append(" 条结果：\n\n");

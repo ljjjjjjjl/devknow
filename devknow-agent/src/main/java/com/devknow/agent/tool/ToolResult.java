@@ -13,7 +13,28 @@ import java.util.List;
  */
 public record ToolResult(String textForLlm, List<Citation> citations) {
 
+    /**
+     * 执行失败：工具压根没跑出结论（参数非法、下游异常、工具不存在）。
+     *
+     * <p>模型应把它理解成"这次检索没有结论"，<b>而不是</b>"知识库里没有" ——
+     * 两者的正确后续动作相反：前者可以重试或换个问法，后者必须拒答。
+     */
     public static ToolResult error(String message) {
+        return new ToolResult(message, List.of());
+    }
+
+    /**
+     * 成功但无结果：工具正常跑完，结论就是"没有"。
+     *
+     * <p>两种情况归到这里 —— 检索 0 命中；或命中了但 top-1 精排分低于
+     * {@code devknow.rerank.min-relevance-score}（命中了一堆噪声，等价于没命中）。
+     *
+     * <p>与 {@link #error} 的区别在<b>语义</b>而不在返回结构：本方法是权威的
+     * "知识库中没有相关内容"，模型必须据此拒答；{@code error} 则只表示这次调用失败，
+     * 不代表知识库没有。两者共用同一个 record，所以靠文本区分是有意为之 ——
+     * 真正需要区分时（比如前端要分别统计）再加字段，现在不提前设计。
+     */
+    public static ToolResult empty(String message) {
         return new ToolResult(message, List.of());
     }
 }

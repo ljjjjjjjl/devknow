@@ -114,6 +114,12 @@ devknow:
     candidate-window: 50
     # 送 rerank 的单条截断长度（字符），控制请求体大小
     max-document-chars: 800
+    # Agent 路径的相关度下限：top-1 精排分低于它就算"未检索到"，
+    # 逼模型走拒答分支，而不是拿着一堆噪声结果自由发挥。
+    # 0.4 来自对当前语料的一次抽样（库内有答案 0.737~0.995，库外 0.002~0.010，
+    # 触发问题的「如何实现异步任务」为 0.318）。换语料或换模型必须重测。
+    # 只作用于 Agent，不影响第 4 周锁定的评估基线。
+    min-relevance-score: 0.4
   agent:
     chat:
       # 第 5 周 Agent：通过 SiliconFlow 调用 DeepSeek-V3（OpenAI 兼容的 chat 端点）
