@@ -18,9 +18,47 @@
   /** 距底部多少像素以内还算"贴着底"，超出就不再自动跟随 */
   const STICK_THRESHOLD = 80;
 
+  /**
+   * 示例问题池。
+   *
+   * <b>不是随手写的。</b>每一条都用 {@code POST /api/admin/search} 打过，只保留 top-1
+   * 精排分 ≥ 0.6 的（Agent 的拒答阈值是 0.4，要留足余量），并且人工确认过 top-5 里
+   * 确实有对得上主题的文档 —— 光看分数不够：「@WebMvcTest 应该怎么用」的 top-1 是
+   * 一条 AOP auto-configuration issue，真正的权威文档（Testing Spring Boot
+   * Applications）排在它后面一位。
+   *
+   * 被淘汰的三条（做示例会直接触发拒答，很难看）：
+   * 「Logback 升级要注意什么」0.367、「虚拟线程怎么开启，有什么坑」0.591、
+   * 「怎么给接口加限流」0.027。
+   *
+   * 元组第二个值是测量时的 top-1 精排分，悬停能看到。换语料或换模型后要重跑。
+   */
+  const SAMPLE_POOL = [
+    ['怎么配置多个数据源', 0.99],
+    ['Spring Boot 里怎么配置 JTA 分布式事务', 1.00],
+    ['@WebMvcTest 应该怎么用', 0.93],
+    ['怎么开启优雅停机', 0.88],
+    ['如何自定义健康检查端点', 0.95],
+    ['Spring Boot 3 升级要注意什么', 0.89],
+    ['怎么配置 CORS', 0.92],
+    ['怎么把指标接入 Prometheus', 0.88],
+    ['怎么用 Testcontainers 写集成测试', 0.99],
+    ['怎么配置 Redis 连接池', 0.95],
+    ['Spring Boot 的配置文件加载顺序是什么', 0.92],
+    ['怎么用 @ConfigurationProperties 绑定配置', 0.98],
+    ['怎么自定义 Banner', 0.98],
+  ];
+
+  /** 每次显示几个示例问题 */
+  const SAMPLE_COUNT = 3;
+
+  /** 示例按钮的配色档位数，与 CSS 里的 .sample.c1 ~ .c5 对应 */
+  const SAMPLE_COLORS = 5;
+
   const el = {
     messages: document.getElementById('messages'),
     empty: document.getElementById('empty'),
+    samples: document.getElementById('samples'),
     composer: document.getElementById('composer'),
     query: document.getElementById('query'),
     configId: document.getElementById('config-id'),
@@ -152,6 +190,7 @@
 
     el.messages.textContent = '';
     el.messages.appendChild(el.empty);
+    renderSamples();          // 顺手换一批示例，不然"新会话"看到的还是刚才那三个
     el.cites.textContent = '';
     el.citeCount.textContent = '0';
     el.query.value = '';
@@ -159,6 +198,31 @@
     setStatus('idle', '就绪');
     setHint('已开新会话，下一句会新建一个');
     updateJump();
+  }
+
+  /**
+   * 随机填一批示例问题。
+   *
+   * 洗牌用 Fisher-Yates：{@code sort(() => Math.random() - .5)} 那种写法分布不均，
+   * 池子不大但也没必要将就。色档同样随机起头，免得每批都是"蓝绿紫"同一个顺序。
+   */
+  function renderSamples() {
+    const pool = SAMPLE_POOL.slice();
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const base = Math.floor(Math.random() * SAMPLE_COLORS);
+
+    el.samples.textContent = '';
+    pool.slice(0, SAMPLE_COUNT).forEach(([question, score], idx) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `sample c${((base + idx) % SAMPLE_COLORS) + 1}`;
+      btn.textContent = question;
+      btn.title = `top-1 精排分 ${score.toFixed(2)}`;
+      el.samples.appendChild(btn);
+    });
   }
 
   function updateConv() {
@@ -474,4 +538,10 @@
       : 'status';
     el.statusText.textContent = text;
   }
+
+  // ---------------------------------------------------------------- 启动
+
+  // 首屏就填一批示例问题（每次刷新都不一样）
+  renderSamples();
+  updateConv();
 })();

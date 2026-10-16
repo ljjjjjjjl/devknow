@@ -10,7 +10,7 @@
   <div class="page">
 
     <header class="head">
-      <h1>devknow <span class="dim">/ Agent 流式输出</span></h1>
+      <h1><span class="brand">devknow</span> <span class="dim">/ Agent 流式输出</span></h1>
       <p class="sub"><code>POST /api/agent/chat/stream</code> · SSE 7 类事件 · 支持多轮</p>
       <div class="status" id="status">
         <span class="dot" id="status-dot"></span>
@@ -25,12 +25,11 @@
         <div class="messages-wrap">
           <div class="messages" id="messages">
             <div class="empty" id="empty">
-              <p>试一个能明显看到多步执行的提问：</p>
-              <div class="samples">
-                <button class="sample" type="button">如何配置多个数据源</button>
-                <button class="sample" type="button">@WebMvcTest 应该怎么用</button>
-                <button class="sample" type="button">Logback 升级要注意什么</button>
-              </div>
+              <p class="empty-title">挑一个问题试试，能看到多步检索与流式输出</p>
+              <!-- 由 agent-demo.js 从问题池里随机填。池子是按 top-1 精排分筛过的，
+                   问到库里没有的会直接触发拒答，所以不能随手写 -->
+              <div class="samples" id="samples"></div>
+              <p class="empty-note">问完可以接着追问（比如「那 Redis 呢」），上下文会延续 · 刷新换一批</p>
             </div>
           </div>
           <button class="jump" type="button" id="jump" hidden>↓ 跳到最新</button>

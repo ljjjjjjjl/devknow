@@ -18,6 +18,10 @@
   --ok: #3fb950;
   --warn: #d29922;
   --err: #f85149;
+  /* 这两个原先只以字面量出现在 citation / done 的事件配色里，
+     提到变量是因为示例问题按钮的配色要复用它们 —— 两处各写一份迟早会漂移 */
+  --cite: #a371f7;
+  --done: #58a6ff;
   --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
 }
 
@@ -27,7 +31,12 @@ html, body { height: 100%; }
 
 body {
   margin: 0;
-  background: var(--bg);
+  /* 两团很淡的辉光，避免整页是一片死黑。透明度刻意压低：
+     主角是流式正文，背景只负责"不那么平" */
+  background:
+    radial-gradient(900px 420px at 12% -8%, rgba(76, 141, 255, .16), transparent 62%),
+    radial-gradient(760px 380px at 88% -12%, rgba(163, 113, 247, .13), transparent 60%),
+    var(--bg);
   color: var(--text);
   font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", Roboto, sans-serif;
   overflow: hidden;               /* 滚动交给面板内部，避免内外两套滚动条 */
@@ -50,11 +59,27 @@ body {
   align-items: center;
   gap: 12px;
   padding-bottom: 10px;
-  border-bottom: 1px solid var(--line);
   margin-bottom: 12px;
+  position: relative;
+}
+
+/* 渐变分隔线代替纯色 1px：不增加视觉重量，但把顶部调色板带出来 */
+.head::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--done), var(--cite) 42%, var(--accent) 68%, transparent);
+  opacity: .6;
 }
 
 h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: .2px; white-space: nowrap; }
+h1 .brand {
+  background: linear-gradient(90deg, var(--done), var(--cite));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
 h1 .dim { color: var(--dim); font-weight: 400; }
 .sub { margin: 0; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 code { font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
@@ -151,21 +176,34 @@ code { font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
 .jump[hidden] { display: none; }
 
 .empty { margin: auto; text-align: center; color: var(--dim); }
-.empty p { margin: 0 0 12px; }
+.empty-title { margin: 0 0 14px; font-size: 13px; }
+.empty-note { margin: 14px 0 0; font-size: 11.5px; color: var(--dim); opacity: .8; }
 .samples { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 
 .sample {
-  padding: 6px 12px;
+  padding: 7px 14px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: var(--panel-2);
-  color: var(--text);
+  background: var(--sc-bg, var(--panel-2));
+  color: var(--sc, var(--text));
   font-size: 12.5px;
   cursor: pointer;
-  transition: border-color .15s, color .15s;
+  transition: border-color .15s, box-shadow .15s, transform .15s;
 }
 
-.sample:hover { border-color: var(--accent); color: var(--accent); }
+/* 五个色档轮着用，颜色取自事件配色（accent / ok / cite / done / warn）。
+   问题随机取、色档随机起头，所以每批的配色组合也不一样 */
+.sample.c1 { --sc: var(--accent); --sc-bg: rgba(76, 141, 255, .13); }
+.sample.c2 { --sc: var(--ok);     --sc-bg: rgba(63, 185, 80, .13); }
+.sample.c3 { --sc: var(--cite);   --sc-bg: rgba(163, 113, 247, .15); }
+.sample.c4 { --sc: var(--done);   --sc-bg: rgba(88, 166, 255, .13); }
+.sample.c5 { --sc: var(--warn);   --sc-bg: rgba(210, 153, 34, .15); }
+
+.sample:hover {
+  border-color: var(--sc, var(--accent));
+  box-shadow: 0 5px 16px -6px var(--sc, var(--accent));
+  transform: translateY(-1px);
+}
 
 .msg { display: flex; flex-direction: column; gap: 6px; }
 .msg.user { align-items: flex-end; }
@@ -178,7 +216,12 @@ code { font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
   word-break: break-word;
 }
 
-.msg.user .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.msg.user .bubble {
+  background: linear-gradient(135deg, var(--accent), var(--done));
+  color: #fff;
+  border-bottom-right-radius: 4px;
+  box-shadow: 0 6px 18px -10px var(--accent);
+}
 
 .answer {
   background: var(--panel-2);
@@ -300,6 +343,22 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
 
 .side-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 14px 8px; }
 .side-head h2 { margin: 0; font-size: 12px; font-weight: 600; color: var(--dim); letter-spacing: .3px; }
+
+/* 标题前一小段色条：一眼能分左右两块讲的是什么，比加图标省地方。
+   颜色跟对应的事件配色一致 —— 引用是紫的（citation），过程是蓝的（step/tool） */
+.side-head h2::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 11px;
+  margin-right: 7px;
+  border-radius: 2px;
+  vertical-align: -1px;
+  background: var(--rule, var(--dim));
+}
+.cites-block .side-head h2 { --rule: var(--cite); }
+.log-block .side-head h2 { --rule: var(--accent); }
+
 .side-head .ghost { margin-left: auto; }
 .count { font-family: var(--mono); font-size: 11px; color: var(--dim); opacity: .7; }
 
@@ -346,8 +405,8 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
 .chip.step { color: var(--accent); }
 .chip.delta { color: var(--ok); }
 .chip.tool { color: var(--warn); }
-.chip.citation { color: #a371f7; }
-.chip.done { color: #58a6ff; }
+.chip.citation { color: var(--cite); }
+.chip.done { color: var(--done); }
 .chip.error { color: var(--err); }
 
 .log {
@@ -368,8 +427,8 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
 .log .e-step { color: var(--accent); }
 .log .e-delta { color: var(--ok); }
 .log .e-tool { color: var(--warn); }
-.log .e-citation { color: #a371f7; }
-.log .e-done { color: #58a6ff; }
+.log .e-citation { color: var(--cite); }
+.log .e-done { color: var(--done); }
 .log .e-error { color: var(--err); }
 
 /* ---------- 窄屏 / 矮窗口回退 ---------- */
