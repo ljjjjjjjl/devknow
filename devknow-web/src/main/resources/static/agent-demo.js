@@ -12,6 +12,9 @@
   const API = '/api/agent/chat/stream';
   const LOG_LIMIT = 300;
 
+  /** 距底部多少像素以内还算"贴着底"，超出就不再自动跟随 */
+  const STICK_THRESHOLD = 80;
+
   const el = {
     messages: document.getElementById('messages'),
     empty: document.getElementById('empty'),
@@ -20,8 +23,12 @@
     configId: document.getElementById('config-id'),
     send: document.getElementById('send'),
     stop: document.getElementById('stop'),
+    jump: document.getElementById('jump'),
     hint: document.getElementById('hint'),
+    cites: document.getElementById('cites'),
+    citeCount: document.getElementById('cite-count'),
     log: document.getElementById('log'),
+    logCount: document.getElementById('log-count'),
     clearLog: document.getElementById('clear-log'),
     status: document.getElementById('status'),
     statusText: document.getElementById('status-text'),
@@ -29,6 +36,44 @@
 
   let controller = null;   // 当前请求的 AbortController
   let streaming = false;
+  let logTotal = 0;        // 累计事件数（日志本身只留最近 LOG_LIMIT 条）
+  let deltaLine = null;    // 本次回答的 delta 汇总行，null 表示还没开始
+  let deltaCount = 0;
+
+  // ---------------------------------------------------------------- 滚动
+
+  /**
+   * 用户是不是还贴着底？
+   *
+   * 每来一个 delta 都无条件滚到底，会把长回答的开头一路顶出视野 ——
+   * 看上去就像内容被截断了；而且他想往回读还会被不停拽回来。
+   * 所以只在"他本来就在底部"时才跟随。
+   */
+  function isNearBottom() {
+    return el.messages.scrollHeight - el.messages.scrollTop - el.messages.clientHeight
+      <= STICK_THRESHOLD;
+  }
+
+  function scrollToBottom() {
+    el.messages.scrollTop = el.messages.scrollHeight;
+    updateJump();
+  }
+
+  /** 贴着底就跟随，否则亮出"跳到最新" */
+  function follow(stick) {
+    if (stick) {
+      scrollToBottom();
+    } else {
+      updateJump();
+    }
+  }
+
+  function updateJump() {
+    el.jump.hidden = isNearBottom();
+  }
+
+  el.messages.addEventListener('scroll', updateJump);
+  el.jump.addEventListener('click', scrollToBottom);
 
   // ---------------------------------------------------------------- 发送
 
@@ -53,6 +98,10 @@
 
   el.clearLog.addEventListener('click', () => {
     el.log.textContent = '';
+    logTotal = 0;
+    deltaLine = null;
+    deltaCount = 0;
+    el.logCount.textContent = '0';
   });
 
   el.empty.addEventListener('click', (e) => {
@@ -86,6 +135,12 @@
     toggleSending(true);
     setStatus('busy', '生成中…');
     setHint('');
+
+    // 引用与 delta 汇总都属于"这一次回答"，新一轮开始就清空
+    el.cites.textContent = '';
+    el.citeCount.textContent = '0';
+    deltaLine = null;
+    deltaCount = 0;
 
     const card = createAnswerCard();
     const state = { text: '', steps: 0, done: null };
@@ -128,8 +183,8 @@
       controller = null;
       card.cursor.classList.add('hidden');
       toggleSending(false);
-      appendLog('done', `前端计时 ${Math.round(performance.now() - startedAt)} ms`);
-      scrollToBottom();
+      appendLog('note', `前端计时 ${Math.round(performance.now() - startedAt)} ms`);
+      updateJump();
     }
   }
 
@@ -190,6 +245,9 @@
   function handleEvent(event, data, state, card) {
     appendLog(event, data);
 
+    // 必须在改 DOM 之前判断：内容一变 scrollHeight 就变了
+    const stick = isNearBottom();
+
     switch (event) {
       case 'step':
         state.steps = data.step;
@@ -200,7 +258,7 @@
         state.text += data.text;
         // textContent 而不是 innerHTML：模型输出是不可信内容
         card.body.textContent = state.text;
-        scrollToBottom();
+        follow(stick);
         break;
 
       case 'tool':
@@ -209,12 +267,13 @@
         break;
 
       case 'citation':
-        addCitation(card, data);
+        // 引用渲染在右栏，不影响消息区高度，所以不用跟着滚
+        addCitation(data);
         break;
 
       case 'done':
         state.done = data;
-        card.meta.appendChild(badge(`${data.steps} 步`, 'step'));
+        // 步数徽章 setStepBadge 已经放了一个（"第 N 步"），这里不再重复加"2 步"
         card.meta.appendChild(badge(`${data.elapsedMs} ms`));
         card.meta.appendChild(badge(`${(data.citations || []).length} 条引用`));
         card.meta.appendChild(badge(data.model));
@@ -226,12 +285,14 @@
         }
         setStatus('ok', `完成 · ${data.elapsedMs} ms`);
         setHint('');
+        follow(stick);
         break;
 
       case 'error':
         card.meta.appendChild(badge(`错误 ${data.code}：${data.message}`, 'err'));
         setStatus('err', '后端返回错误');
         setHint('');
+        follow(stick);
         break;
 
       default:
@@ -271,14 +332,11 @@
     const meta = document.createElement('div');
     meta.className = 'meta';
 
-    const citations = document.createElement('div');
-    citations.className = 'citations';
-
-    wrap.append(bubble, meta, citations);
+    wrap.append(bubble, meta);
     el.messages.appendChild(wrap);
     scrollToBottom();
 
-    return { wrap, body, cursor, meta, citations, stepBadge: null };
+    return { wrap, body, cursor, meta, stepBadge: null };
   }
 
   function setStepBadge(card, text) {
@@ -290,7 +348,7 @@
     }
   }
 
-  function addCitation(card, data) {
+  function addCitation(data) {
     const a = document.createElement('a');
     a.className = 'cite';
     a.href = data.url || '#';
@@ -301,9 +359,13 @@
     id.className = 'id';
     id.textContent = `#${data.documentId}`;
 
-    a.append(id, document.createTextNode(data.title || '(无标题)'));
-    card.citations.appendChild(a);
-    scrollToBottom();
+    const title = document.createElement('span');
+    title.className = 'title';
+    title.textContent = data.title || '(无标题)';
+
+    a.append(id, title);
+    el.cites.appendChild(a);
+    el.citeCount.textContent = String(el.cites.childElementCount);
   }
 
   function badge(text, kind) {
@@ -314,20 +376,34 @@
   }
 
   function appendLog(event, data) {
-    const line = document.createElement('div');
-    line.className = `e-${event}`;
-    const payload = typeof data === 'string' ? data : JSON.stringify(data);
-    line.textContent = `[${event}] ${payload}`;
-    el.log.appendChild(line);
+    // delta 一个 token 一行的话，一次回答就能刷出 400+ 行，把真正要看的事件全淹掉。
+    // 合并成一行计数，并让它始终贴在日志末尾。
+    if (event === 'delta') {
+      if (!deltaLine) {
+        deltaLine = document.createElement('div');
+        deltaLine.className = 'e-delta';
+        el.log.appendChild(deltaLine);
+      }
+      deltaCount += 1;
+      deltaLine.textContent = `[delta] ×${deltaCount}`;
+      el.log.appendChild(deltaLine);      // appendChild 会把已有节点移到末尾
+    } else {
+      const line = document.createElement('div');
+      line.className = `e-${event}`;
+      const payload = typeof data === 'string' ? data : JSON.stringify(data);
+      line.textContent = `[${event}] ${payload}`;
+      el.log.appendChild(line);
+    }
 
     while (el.log.childElementCount > LOG_LIMIT) {
+      // 别把还在用的 delta 汇总行删掉，否则下一个 delta 会把它又插回末尾
+      if (el.log.firstChild === deltaLine) break;
       el.log.removeChild(el.log.firstChild);
     }
     el.log.scrollTop = el.log.scrollHeight;
-  }
 
-  function scrollToBottom() {
-    el.messages.scrollTop = el.messages.scrollHeight;
+    logTotal += 1;
+    el.logCount.textContent = String(logTotal);
   }
 
   function toggleSending(busy) {

@@ -10,13 +10,8 @@
   <div class="page">
 
     <header class="head">
-      <div>
-        <h1>devknow <span class="dim">/ Agent 流式输出</span></h1>
-        <p class="sub">
-          后端 <code>POST /api/agent/chat/stream</code> 用 SSE 推送 6 类事件，
-          下面是边收边渲染的效果。右侧是原始事件流，可以对照看。
-        </p>
-      </div>
+      <h1>devknow <span class="dim">/ Agent 流式输出</span></h1>
+      <p class="sub"><code>POST /api/agent/chat/stream</code> · SSE 6 类事件</p>
       <div class="status" id="status">
         <span class="dot" id="status-dot"></span>
         <span id="status-text">就绪</span>
@@ -26,15 +21,19 @@
     <main class="layout">
 
       <section class="panel chat">
-        <div class="messages" id="messages">
-          <div class="empty" id="empty">
-            <p>试一个能明显看到多步执行的提问：</p>
-            <div class="samples">
-              <button class="sample" type="button">如何配置多个数据源</button>
-              <button class="sample" type="button">@WebMvcTest 应该怎么用</button>
-              <button class="sample" type="button">Logback 升级要注意什么</button>
+        <!-- wrap 只用来给"跳到最新"按钮定位，滚动发生在里面的 .messages -->
+        <div class="messages-wrap">
+          <div class="messages" id="messages">
+            <div class="empty" id="empty">
+              <p>试一个能明显看到多步执行的提问：</p>
+              <div class="samples">
+                <button class="sample" type="button">如何配置多个数据源</button>
+                <button class="sample" type="button">@WebMvcTest 应该怎么用</button>
+                <button class="sample" type="button">Logback 升级要注意什么</button>
+              </div>
             </div>
           </div>
+          <button class="jump" type="button" id="jump" hidden>↓ 跳到最新</button>
         </div>
 
         <form class="composer" id="composer">
@@ -53,20 +52,36 @@
         </form>
       </section>
 
-      <aside class="panel log-panel">
-        <div class="log-head">
-          <h2>原始事件流</h2>
-          <button class="ghost small" type="button" id="clear-log">清空</button>
-        </div>
-        <div class="legend">
-          <span class="chip step">step</span>
-          <span class="chip delta">delta</span>
-          <span class="chip tool">tool</span>
-          <span class="chip citation">citation</span>
-          <span class="chip done">done</span>
-          <span class="chip error">error</span>
-        </div>
-        <pre class="log" id="log"></pre>
+      <!-- 右栏上半是"依据"（引用来源），下半是"过程"（原始事件流）。
+           引用放在这里而不是回答下面：挂在回答下面会把正文一路往上挤，
+           而引用本身很短，占满一行是浪费。 -->
+      <aside class="panel side">
+
+        <section class="side-block cites-block">
+          <div class="side-head">
+            <h2>引用来源</h2>
+            <span class="count" id="cite-count">0</span>
+          </div>
+          <div class="cites" id="cites"></div>
+        </section>
+
+        <section class="side-block log-block">
+          <div class="side-head">
+            <h2>原始事件流</h2>
+            <span class="count" id="log-count">0</span>
+            <button class="ghost small" type="button" id="clear-log">清空</button>
+          </div>
+          <div class="legend">
+            <span class="chip step">step</span>
+            <span class="chip delta">delta</span>
+            <span class="chip tool">tool</span>
+            <span class="chip citation">citation</span>
+            <span class="chip done">done</span>
+            <span class="chip error">error</span>
+          </div>
+          <pre class="log" id="log"></pre>
+        </section>
+
       </aside>
 
     </main>
