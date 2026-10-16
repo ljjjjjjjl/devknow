@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import java.io.IOException;
 import java.util.stream.Collectors;
 
 /**
@@ -49,6 +50,31 @@ public class GlobalExceptionHandler {
     public ApiResponse<Void> handleIllegalArgument(IllegalArgumentException e) {
         log.warn("参数非法: {}", e.getMessage());
         return ApiResponse.fail(ErrorCode.BAD_REQUEST, e.getMessage());
+    }
+
+    /**
+     * 客户端断开导致写响应失败。
+     *
+     * <p><b>为什么要单独兜这一条</b>：SSE 流里客户端一刷新页面或关标签，写响应就会抛
+     * {@code IOException}（Windows 上是"你的主机中的软件中止了一个已建立的连接"）。
+     * Spring 把它记成 async error 并做一次错误分发，落到 {@link #handleUnknown} ——
+     * 而那里要写 {@code ApiResponse}，响应的 Content-Type 还停在 {@code text/event-stream}，
+     * 于是再抛 {@code HttpMessageNotWritableException}。一次断开在日志里留下三条 ERROR 堆栈，
+     * 演示页每刷新一次就刷一屏。
+     *
+     * <p>这既不是业务异常也不是 bug：对端已经走了，没有任何人能收到响应体。
+     * 所以只记一行 WARN，并返回<b>空体</b>（void 返回值不经过消息转换器，
+     * 绕开那个注定失败的 Content-Type 协商）。
+     *
+     * <p>取舍：本应用里能冒出 MVC 层的 IO 异常几乎只有客户端断开这一种
+     * —— 采集与文件的 IO 都在各自的 Service 里包成了业务异常，
+     * AgentController 的 SSE 写失败也已包成 ClientGoneException。
+     * 真出现别的 IO 失败时，这里仍会记下 message，只是没有堆栈。
+     */
+    @ExceptionHandler(IOException.class)
+    @ResponseStatus(HttpStatus.OK)
+    public void handleClientAbort(IOException e) {
+        log.warn("写响应失败（通常是客户端已断开）: {}", e.getMessage());
     }
 
     @ExceptionHandler(Exception.class)
