@@ -9,6 +9,7 @@
 
 | 事件 | data | 说明 |
 |---|---|---|
+| `start` | `{"conversationId":..}` | **最先发出**，新建会话时前端靠它拿到 id |
 | `step` | `{"step":1}` | 一步 = 一次模型调用 |
 | `delta` | `{"text":"根据"}` | 回答的增量片段，可多次 |
 | `tool` | `{"name":"..","arguments":".."}` | 即将执行的工具 |
@@ -64,11 +65,74 @@
 - 右侧展示原始事件流，用来对照"推出去的是什么"和"渲染出来的是什么"
 - 收到 `done` 时比对"流式拼接的文本"与 `done.answer`，不一致以后端为准并在事件日志里标出来
 
+### 会话持久化
+
+**表结构**（`V6__add_conversation.sql`）
+
+- `conversation`：`agent_config_id` / `title` / `status`（`ACTIVE` | `DELETED`）/ 时间戳
+- `conversation_message`：`conversation_id` / `seq` / `role` / `content` / `citations` JSONB / `error`
+- **只存 user 与 assistant，不存 tool 往返**。一次 `search_knowledge` 的 tool 结果约 5×800 字符：存了它，`loadContext` 要么塞回上下文打爆预算，要么存了不读白占空间；回放工具原文还会让模型把"上次检索到的噪声"当依据
+- **`V1__init.sql` 第 195–205 行预留的 `user_id` / `tool_calls` / `tool_call_id` / `token_in` / `token_out` / `step_index` 一个都没建**，逐条理由写在 V6 的文件头注释里。V1 不能改（Flyway 用 checksum 校验），所以差异记在 V6
+- `citations` 是 jsonb，实体用 String 承载，写入必须手写 `CAST(#{...} AS jsonb)` 的 INSERT —— 和 `document_chunk.metadata` 同一个坑
+- 软删而非物理删除；`idx_conversation_agent_updated` 是 `WHERE status='ACTIVE'` 的部分索引，所以列表查询**必须**带这个条件
+- `updated_at` 没有触发器，追加消息时显式 `touch()`，否则会话列表排序退化成按创建时间
+
+**上下文裁剪**（`ConversationService.trim`，静态纯函数，可脱离数据库单测）
+
+- 从最近往前累加，**一旦某条超预算就停**：取连续窗口，不是"挑出所有塞得下的"。跳跃式挑选会把上下文打成碎片
+- 双上限：token 预算 4000 + 最多 10 条。`TokenEstimator` 是启发式（中英混合与代码块会低估），单靠 token 不保险
+- 窗口**必须以 user 开头**：截断点可能正好落在一条 assistant 上，那样模型会看到"没有提问的回答"
+- 预算只约束历史，不含 system prompt、本轮 query，也**不含本轮 ReAct 里 tool 返回的检索结果**（那部分靠 `max_steps` 兜底）
+- 失败占位在 SQL 层就被过滤，不进上下文；但消息列表接口仍返回它，供回看显示"这一轮失败了"
+
+**编排顺序（踩过的坑）**
+
+`loadContext` 必须在 `appendUser` **之前**。反过来的话 `loadContext` 会把本轮问题当成历史返回，而 `AgentRunner` 内部还会再追加一次本轮 query —— 同一条问题在 messages 里出现两次。
+
+**新增 `start` 事件**
+
+建立会话后**最先**推 `{"conversationId":..}`，让前端立刻拿到 id 才能续聊。它排在 `loadContext`/`appendUser` 之前 —— 那两步失败时前端至少知道自己该丢弃哪个会话。
+
+**`tool_choice: required` 修掉了追问幻觉**
+
+多轮实测发现：追问「那 Redis 呢？」时模型**一次检索都不发**就作答，还宣称"检索到了一些关于配置多个 Redis 数据源的信息"，引用 0 条。日志证据：
+
+```
+会话上下文: conversationId=1, 历史 2 条 → 取 2 条
+流式调用模型: messages=4 条, tools=1 个
+流式回合结束: content=780 字, toolCalls=0 个      ← 一次检索都没发
+```
+
+它把历史里上一轮自己的答案当成了知识来源，正好绕过已经建立的两层防护：相关度阈值管不到（压根没检索），拒答规则也管不到（没见过"检索结果为空"）。提示词里补的"历史不得作为知识来源"拦不住。
+
+修法：**第一步下发 `tool_choice: "required"`**，把"必须先检索"从提示词请求升级成结构保证。实测 SiliconFlow 的 DeepSeek-V3 支持（返回 `content="" + tool_calls`）。修复后同一场景 `toolCalls=1`、检索参数 `如何配置多个Redis数据源`（指代解析正确）、引用 5 条。
+
+副作用：打招呼类问题也会先检索一次，检索不到即按拒答规则回"知识库中没有找到相关内容"。对知识库助手来说这符合预期 —— DB 里的 system_prompt 本就写着"若检索不到相关内容，明确说明不知道"。
+
+顺带堵掉了"首次调用返回空回合"的一个来源：第一步被强制调工具后，不可能再出现 `content=0 且 toolCalls=0`。
+
+**实测**
+
+| 场景 | 结果 |
+|---|---|
+| 多轮 | 第 2 轮 `toolCalls=1`、引用 5 条，两轮 `conversationId` 一致 |
+| 刷新恢复 | `GET /messages` 返回 4 条，`citations` 是 JSON 数组（不是被转义的字符串） |
+| 失败占位 | 中途断开 → `seq=2 role=assistant error="客户端断开"` |
+| 软删 | `DELETE` 后列表不再出现；重复删除返回 `40004` |
+| 全量测试 | 35 个用例全绿（6 + 11 + 11 + 7） |
+
+**附带修掉的日志噪声**
+
+客户端一刷新页面，SSE 写就抛 `IOException`。Spring 把它记成 async error 并做一次错误分发，落到 `GlobalExceptionHandler.handleUnknown` —— 那里要写 `ApiResponse`，而响应的 Content-Type 还停在 `text/event-stream`，于是再抛 `HttpMessageNotWritableException`。**一次断开在日志里留下 3 条 ERROR 堆栈**，演示页每刷新一次刷一屏。修法是给 `IOException` 加一个专门的 handler：记一行 WARN、返回空体（`void` 不经过消息转换器，绕开注定失败的 Content-Type 协商）。修完断开只剩 2 条 WARN。
+
 ### 未做
 
-- **会话持久化**：`V1__init.sql` 第 195–205 行预留了两张表的字段（含 `tool_calls` JSONB 与 `step_index`，原意是支持"执行到一半中断可恢复"），但表没建。本周按需求跳过
+- **会话管理接口没做分页**：列表固定 `LIMIT 100`。当前数据量小，先不引入分页参数
+- **多端并发写同一会话不安全**：`seq` 取 `MAX(seq)+1`，只保证单端串行。要做多端同步时改成 `INSERT ... SELECT COALESCE(MAX(seq),0)+1` 或对会话行 `FOR UPDATE`
+- **演示页仍是单轮的**：不发送也不保存 `conversationId`；`start` 事件会被 `default: break` 忽略，只是原始事件流日志里多一行。多轮 UI 留到下一步
+- **上下文预算 4000 是拍的**：只按 `TokenEstimator` 的启发式估算，没有按真实 token 分布校准
 - **JDK HttpClient 没有响应体读超时**：`HttpRequest.timeout` 只覆盖到响应头，流建立后上游若不回数据会一直挂着。当前靠"客户端断开导致写失败"兜底，是一条真实的债
-- **首次模型调用偶尔返回空回合**（已记录，未修）：`tool_choice: auto` 下模型偶尔既不给正文也不给 `tool_calls`。实测流式首次调用 6 次里出现 1 次（`content=0 字, toolCalls=0 个`），相同请求重试即成功，属上游抖动而非解析问题。当前直接失败是有意的 —— 空回合继续只会在 `max_steps` 里空转 8 次。候选修法：① 空回合重试一次；② 首步改 `tool_choice: required`
+- **空回合**（**第一步已修**）：`tool_choice: auto` 下模型偶尔既不给正文也不给 `tool_calls`。现在第一步被 `required` 强制调工具，不可能再出现该情况；残余风险只在第 2 步及以后。原始频率是流式首次调用 6 次里出现 1 次，相同请求重试即成功，属上游抖动而非解析问题。当前行为仍是直接失败（空回合继续只会在 `max_steps` 里空转 8 次），候选修法是空回合重试一次
 - 演示页只做了浏览器手测，没有自动化
 
 ### 改动文件
@@ -84,3 +148,35 @@
 | `devknow-web/src/main/resources/static/agent-demo.html` | 新增，演示页 |
 | `devknow-web/src/main/resources/static/agent-demo.css` | 新增，演示页样式 |
 | `devknow-web/src/main/resources/static/agent-demo.js` | 新增，SSE 解析与渲染 |
+
+**会话持久化新增（11）**
+
+| 文件 | 说明 |
+|---|---|
+| `devknow-web/src/main/resources/db/migration/V6__add_conversation.sql` | 新增，两张表 + CHECK 约束 + V1 预留字段的差异说明 |
+| `devknow-domain/.../entity/Conversation.java` | 新增，会话实体 |
+| `devknow-domain/.../entity/ConversationMessage.java` | 新增，消息实体（`citations` 用 String 承载 jsonb） |
+| `devknow-domain/.../enums/ConversationEnums.java` | 新增，`ConversationStatus` / `MessageRole` |
+| `devknow-domain/.../mapper/ConversationMapper.java` | 新增，列表（部分索引）/ touch / 软删 |
+| `devknow-domain/.../mapper/ConversationMessageMapper.java` | 新增，手写 INSERT + `CAST AS jsonb`、`nextSeq`、过滤失败占位 |
+| `devknow-domain/.../dto/AgentChatResult.java` | 新增，非流式返回会话 id 的包装（不让 Runner 认识会话） |
+| `devknow-domain/.../dto/ConversationMessageView.java` | 新增，把 jsonb 文本解析成 `List<Citation>` |
+| `devknow-common/.../util/TokenEstimator.java` | 新增，token 估算收口到 common（原先有两份副本） |
+| `devknow-agent/.../conversation/ConversationService.java` | 新增，会话读写 + 上下文裁剪 |
+| `devknow-agent/src/test/.../conversation/ConversationServiceTest.java` | 新增，7 个裁剪边界用例，不连库 |
+
+**会话持久化修改（11）**
+
+| 文件 | 改动 |
+|---|---|
+| `devknow-agent/.../engine/AgentRunner.java` | 加 `history` 参数 + 第三步硬约束（历史不是知识来源）+ 第一步 `tool_choice: required` |
+| `devknow-agent/.../client/ChatClient.java` | `chat` / `streamChat` 加 `requireToolCall` |
+| `devknow-agent/.../client/ChatMessage.java` | 加 `assistant(content)` 工厂，用于回放历史 |
+| `devknow-agent/src/test/.../AgentRunnerTest.java` | 适配新签名，加 2 个历史拼装用例、2 个 `required` 用例（7 → 11） |
+| `devknow-web/.../controller/AgentController.java` | 会话编排 + `start` 事件 + 3 个管理接口 |
+| `devknow-web/.../config/GlobalExceptionHandler.java` | 兜客户端断开的 `IOException`，消掉 3 条 ERROR 堆栈 |
+| `devknow-common/.../api/ErrorCode.java` | 加 `CONVERSATION_NOT_FOUND(40004)` |
+| `devknow-domain/.../dto/AgentChatRequest.java` | 加 `conversationId`（可空 = 新建） |
+| `devknow-domain/src/test/.../SchemaEnumConsistencyTest.java` | 支持多迁移文件，加 2 个 V6 约束用例（4 → 6） |
+| `devknow-ingestion/.../chunker/HeadingChunker.java` | `estimateTokens` 改为委托 `TokenEstimator` |
+| `devknow-retrieval/.../embedding/SiliconFlowEmbeddingService.java` | 同上，消掉"两处必须同步修改"的副本 |
