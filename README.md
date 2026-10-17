@@ -6,7 +6,7 @@
 本项目在数据模型里保留 `version` 与 `version_order`，让检索可以按版本硬过滤。
 
 > 目标岗位方向：Java 后端 / Java + 智能体。
-> 8 周计划，当前处于 **第 1 周（数据接入）** 完成状态。
+> 8 周计划，第 1–6 周已完成，当前处于 **第 7 周（评测 + 压测 + 部署）**。
 
 ---
 
@@ -14,46 +14,250 @@
 
 | 项 | 状态 |
 |---|---|
-| 构建 | ✅ `mvn test` 全绿（4/4 通过），`devknow.jar` 43 MB 可执行包已产出 |
-| 模块 | ✅ 6 个模块齐备（common / domain / ingestion / retrieval / agent / web） |
-| 数据库迁移 | ✅ `V1__init.sql`（5 张表 + 注释 + 部分索引）已就位，Flyway 自动执行 |
-| 采集能力 | ✅ GitHub issue/PR 采集、Git 仓库文档采集、任务状态机、幂等落库 |
-| 切分能力 | ⚠️ `HeadingChunker` 已实现（原计划第 2 周，提前完成） |
-| 向量化 | ❌ 第 2 周：加 `V2__add_pgvector.sql` + `EmbeddingService` 实现 |
-| 检索 | ❌ 第 3-4 周：BM25 + 向量 + RRF + Rerank |
-| Agent | ❌ 第 5-6 周：ReAct + 工具调用 + SSE |
-| **启动验证** | ✅ **已实测启动成功**：Tomcat 8080、Spring 上下文加载、`/api/health` 返回 200 且中文正常 |
-| **连库验证** | ✅ **已完整跑通**：采集入库 5344 篇 document / 1823 个 chunk；并完成一次完整的数据库迁移（SQL_ASCII → UTF-8 + ICU），迁移后重采验证通过 |
+| 构建 | ✅ `mvn test` 全绿（39 个用例），可执行包 `devknow.jar` 已产出 |
+| 模块 | ✅ 6 个模块齐备（common / domain / ingestion / retrieval / agent / web），主代码 91 个 Java 文件 |
+| 数据库迁移 | ✅ Flyway V1–V6 已执行：建表 / pgvector / 全文索引 / 点号归一化 / Agent 配置 seed / 会话表 |
+| 采集 | ✅ GitHub issue + PR + 仓库文档三路，任务状态机 + 幂等落库 + 死信回收 |
+| 语料规模 | ✅ 5344 篇 document（216 Doc + 4318 Issue + 810 PR），8580 个 chunk |
+| 切分与向量化 | ✅ `HeadingChunker` 按标题层级切分并维护 `heading_path`；bge-m3 1024 维，覆盖率 100% |
+| 检索 | ✅ PostgreSQL 全文（`ts_rank`）+ pgvector（HNSW）+ RRF(k=60) + cross-encoder 精排 |
+| Agent | ✅ ReAct 循环（`max_steps=8`）+ 工具调用 + 相关度阈值拒答 + 会话持久化 + SSE 7 类事件 |
+| 前端 | ✅ `static/agent-demo.html` 演示页，纯 HTML/CSS/JS 无构建步骤，支持多轮 |
+| 评测 | ✅ 50 条检索评估集 + 20 条库外集 + 3 个 Python 评估/压测脚本（检索 A/B、并发压测、Agent 端到端） |
 
 ### 代码规模
 
 | 模块 | main | test | 说明 |
 |---|---|---|---|
-| devknow-common | 8 | 0 | 统一返回体、异常、错误码、哈希、路径、文件工具、EmbeddingService 接口 |
-| devknow-domain | 16 | 1 | 5 个实体 + 5 个 Mapper + DTO + 枚举 + **迁移一致性测试** |
-| devknow-ingestion | 18 | 0 | GitHub 客户端、限流器、任务状态机、解析器、切分器 |
-| devknow-retrieval | 0 | 0 | 第 3 周填充 |
-| devknow-agent | 0 | 0 | 第 5 周填充 |
-| devknow-web | 5 | 0 | 启动类、全局异常处理、健康检查、Admin 接口 |
+| devknow-common | 10 | 0 | 统一返回体、错误码、异常、`EmbeddingService` 接口、`PgVector`、工具类 |
+| devknow-domain | 29 | 1 | 7 个实体 + 7 个 Mapper + 11 个 DTO + 4 个枚举 + **迁移一致性测试** |
+| devknow-ingestion | 22 | 1 | GitHub 采集、仓库文档同步、解析、切分、索引、向量回填、任务队列 |
+| devknow-retrieval | 10 | 0 | 混合检索、嵌入客户端、精排客户端、评估跑批 |
+| devknow-agent | 12 | 2 | ReAct 引擎、LLM 客户端、工具、会话服务、流式回调 |
+| devknow-web | 8 | 0 | 启动类、4 个 Controller、全局异常、SSE 配置、迁移脚本、演示页 |
+| **合计** | **91** | **4** | 39 个测试用例 |
 
 ---
 
 ## 架构
 
+### 六个模块
+
 ```
-数据源 ──→ 模块1 接入流水线 ingestion ──→ PostgreSQL ──→ 模块2 检索 ──→ 模块3 Agent
-  │            SourceSync → Parser              │            │              │
-  │            → Chunker → IndexWriter          │        版本过滤         ReAct
-  │                                             │        BM25+向量        工具调用
-GitHub API                              knowledge_source  RRF融合         SSE流式
-Git 仓库                                document          reranker
-                                        document_chunk
-                                        ingestion_job
-                                        agent_config
+┌──────────────────────────────────────────────────────────────────────┐
+│ 接口层                                              devknow-web       │
+│   DevknowApplication · AdminController · AgentController              │
+│   EvalController · HealthController · SourceService                   │
+│   GlobalExceptionHandler · AgentStreamConfig                          │
+│   application.yml · db/migration V1~V6 · static/agent-demo.*          │
+└──────────────┬─────────────────────────────────┬─────────────────────┘
+               │                                 │
+┌──────────────▼───────────────┐   ┌─────────────▼────────────────────┐
+│ 采集层                        │   │ Agent 层                          │
+│   devknow-ingestion          │   │   devknow-agent                   │
+│   GitHubClient               │   │   AgentRunner      （ReAct 循环）  │
+│   GitHubIssueSyncer          │   │   ChatClient       （LLM 调用）    │
+│   GitRepoCloner              │   │   ChatMessage / AssistantTurn      │
+│   TarballDownloader          │   │   SearchKnowledgeTool              │
+│   RepoFetcher                │   │   ToolResult / AgentTool           │
+│   GitRepoDocSyncer           │   │   AgentStreamListener              │
+│   AsciiDocParser /           │   │   ConversationService              │
+│   MarkdownParser             │   │   AgentConfigService               │
+│   HeadingChunker             │   │                                    │
+│   IndexWriter                │   │                                    │
+│   ChunkBackfillService       │   │                                    │
+│   EmbeddingBackfillService   │   │                                    │
+│   IngestionJobService        │   │                                    │
+│   JobWorker                  │   │                                    │
+└──────┬────────────────┬──────┘   └─────────────────┬──────────────────┘
+       │                │                            │
+       │       ┌────────▼────────────────────────────▼───────────────┐
+       │       │ 检索层                              devknow-retrieval │
+       │       │   RetrievalService（向量 + 全文 + RRF + rerank）      │
+       │       │   SiliconFlowEmbeddingService   bge-m3               │
+       │       │   SiliconFlowRerankService      bge-reranker-v2-m3   │
+       │       │   EvaluationService（评估跑批）                       │
+       │       │   RerankProperties / EmbeddingProperties             │
+       │       └────────┬────────────────────────────────────────────┘
+       │                │
+       │       ┌────────▼────────────────────────────────────────────┐
+       └───────► 数据层                                devknow-domain  │
+               │   entity ×7   dto ×11   enums ×4   mapper ×7         │
+               │   （MyBatis-Plus，不含 Spring Web 依赖）              │
+               └────────┬────────────────────────────────────────────┘
+               ┌────────▼────────────────────────────────────────────┐
+               │ 底座                                 devknow-common   │
+               │   ApiResponse / ErrorCode / BizException             │
+               │   EmbeddingService / PgVector / JsonUtils            │
+               │   HashUtils / PathUtils / FileUtils / TokenEstimator │
+               └─────────────────────────────────────────────────────┘
 ```
 
-**依赖方向**：`web → {ingestion, retrieval, agent} → domain → common`
-（`agent` 不依赖 `ingestion`，保证采集细节不泄漏到 Agent 运行时）
+依赖边（按各模块 `pom.xml` 实际声明，不是按分层推断）：
+
+| 模块 | 依赖 |
+|---|---|
+| `devknow-web` | `ingestion`, `agent` |
+| `devknow-ingestion` | `domain`, `retrieval` |
+| `devknow-agent` | `retrieval` |
+| `devknow-retrieval` | `domain` |
+| `devknow-domain` | `common` |
+| `devknow-common` | — |
+
+两点容易记错：`web` **不直接**依赖 `retrieval`（经 ingestion / agent 传递）；`agent` 不依赖 `ingestion`，采集细节不泄漏到运行时。
+
+### RAG 检索链路
+
+```
+POST /api/admin/search {"query": "...", "topK": 20}
+        │
+        ▼
+RetrievalService.search()
+        │
+        ├─ ① 嵌入：embedOne(query) → SiliconFlow bge-m3（1024 维）   ~250 ms
+        │
+        ├─ ② 候选窗口 window = max(rerank 可用 ? 50 : 20, topK)
+        │      窗口开大是为了召回：@WebMvcTest 的权威文档在词法路排第 27，
+        │      窗口 20 时它进不了候选池，rerank 再准也看不到
+        │
+        ▼  （两路串行执行）
+   ┌────────────────────┐        ┌────────────────────────────┐
+   │ 向量路               │        │ 词法路                       │
+   │ pgvector HNSW        │        │ PostgreSQL 全文检索           │
+   │ cosine 距离          │        │ ts_rank（注意：不是 BM25）     │
+   │ 取 window 条         │        │ 取 window 条                 │
+   └─────────┬──────────┘        └──────────────┬─────────────┘
+             │                                   │
+             └──────────────┬────────────────────┘
+                            ▼
+                  ③ RRF 融合：score = Σ 1/(60 + rank)
+                     参数 k=60、RRF_CANDIDATES=20
+                     同时记录 vectorRank / keywordRank（诊断用）
+                            │
+                            ▼
+                  ④ rerank 开关 devknow.rerank.enabled
+                     │
+        ┌────────────┴─────────────┐
+        │ 开                        │ 关
+        ▼                          ▼
+   bge-reranker-v2-m3          直接用 RRF 顺序
+   候选 50 条 → 每条截 800 字符
+   精排 → 列表顺序=精排顺序        rerankScore 为 null
+   rerankScore 有值             （JSON 里字段整个消失）
+        │                          │
+        │   ⚠️ rerank 调用失败时     │
+        │   不报错，log.warn 后      │
+        └───────► 降级回 RRF ◄──────┘
+                            │
+                            ▼
+                  ⑤ 截断 topK（上限 50）→ List<SearchResult>
+```
+
+### Agent 的 ReAct 循环
+
+```
+POST /api/agent/chat            （非流式，返回 AgentChatResult）
+POST /api/agent/chat/stream     （SSE，7 类事件）
+        │
+        ▼
+AgentController.chat / runStream
+   ① configService.getRequired(agentConfigId)   取 提示词 / 模型 / maxSteps=8 / tool_names
+   ② conversationService.resolve(...)           会话不存在则新建一条
+   ③ loadContext(conversationId)     ← 必须早于 ④，否则本轮问题在 messages 里出现两次
+   ④ appendUser(conversationId, query)
+        │
+        ▼
+AgentRunner.loop(config, history, query, listener)
+        │
+        messages = [ system(基础提示词 + 三条硬约束) ]
+                 + [ history（仅多轮时，提示词追加"历史不得作为知识来源"） ]
+                 + [ user(query) ]
+        │
+        ▼
+   ┌───────────────  for step = 1 .. 8  ──────────────────────────────┐
+   │                                                                  │
+   │   ChatClient.chat(messages, tools, requireToolCall)               │
+   │        requireToolCall = (step == 1)     ← 把"必须先检索"从        │
+   │                                            提示词请求升级成结构保证 │
+   │                │                                                  │
+   │                ▼                                                  │
+   │         AssistantTurn                                             │
+   │                │                                                  │
+   │      ┌─────────┴──────────┐                                       │
+   │      │                    │                                       │
+   │  hasToolCalls        hasContent                                   │
+   │      │                    │                                       │
+   │      ▼                    ▼                                       │
+   │  执行工具            return AgentChatResponse(                     │
+   │  SearchKnowledgeTool    answer, citations, steps=step, model )    │
+   │  （检索 topK=5）              │                                   │
+   │      │                       └──► 正常结束，最短 2 步            │
+   │      ▼                                                            │
+   │  相关度判定：top1 < min-relevance-score(0.4) 或 0 命中            │
+   │      │                                                            │
+   │      ├ 有结果 → ToolResult(文本 + citations) → messages += tool   │
+   │      └ 不相关 → ToolResult.empty("未检索到相关内容") → 同上        │
+   │      │                                                            │
+   │      └──► continue 下一 step（模型据此走拒答分支）                 │
+   │                                                                   │
+   │  工具和内容都没有（空回合）→ 抛 AGENT_LLM_ERROR(40003)             │
+   └───────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+   超过 maxSteps → 抛 AGENT_MAX_STEPS_EXCEEDED(40001)
+
+        ▼
+AgentController 收尾
+   ⑤ appendAssistant(conversationId, answer, citations)
+   流式：send("done", {answer, steps, model, elapsedMs, citations}) → emitter.complete()
+   非流式：ApiResponse<AgentChatResult{conversationId, response}>
+```
+
+### 一次流式对话的事件时序
+
+```
+客户端                              服务端
+  │  POST /api/agent/chat/stream {"agentConfigId":1,"query":"..."}
+  ├──────────────────────────────────►│
+  │                                   │ ① resolve 会话（不存在则新建）
+  │◄──── event: start ────────────────│ {"conversationId": 12}   ← 最先发，前端靠它续聊
+  │                                   │ ② loadContext → appendUser
+  │◄──── event: step ─────────────────│ {"step": 1}
+  │                                   │ ③ 第 1 步强制 tool_choice="required"
+  │◄──── event: tool ─────────────────│ {"name":"search_knowledge","arguments":"..."}
+  │                                   │ ④ 执行检索（约 1.1 s）
+  │◄──── event: citation ─────────────│ {"documentId":..}  ×N（按 id 去重）
+  │◄──── event: step ─────────────────│ {"step": 2}
+  │◄──── event: delta ────────────────│ {"text":"..."}   ×465（增量片段）
+  │◄──── event: done ─────────────────│ {answer, steps:2, model, elapsedMs, citations}
+  │                                   │ ⑤ appendAssistant → emitter.complete()
+
+  error 事件与 done 互斥；客户端断开时抛 ClientGoneException，只记 WARN + 落一条失败占位
+```
+
+### 两条链路全景
+
+```
+【采集链路】离线，JobWorker 每 5 秒轮询 ingestion_job
+  GitHub API ──► issue / PR ─────────────┐
+  Tarball 下载 / Git Clone ──► .adoc/.md ─┴─► Parser ──► HeadingChunker ──► IndexWriter
+                                                                              │
+                                                    ┌─────────────────────────┘
+                                                    ▼
+                                          document (5344) / document_chunk (8580)
+                                                    │
+                                          EmbeddingBackfillService（每 10 分钟扫 1000 条）
+                                                    │
+                                                    ▼
+                                          bge-m3 → embedding vector(1024)
+
+【查询链路】在线，三条独立入口
+  浏览器 / 评估脚本
+    ├─► POST /api/admin/search        ──► RetrievalService ──► pgvector + 全文 + RRF [+rerank]
+    ├─► POST /api/admin/eval/run      ──► EvaluationService（服务端同口径评估，50 条）
+    └─► POST /api/agent/chat[/stream] ──► AgentRunner ──► SearchKnowledgeTool
+                                                          └─► RetrievalService（复用同一条链路）
+```
 
 ---
 
@@ -89,12 +293,18 @@ psql -U devknow -h 127.0.0.1 -d devknow -c "SELECT extversion FROM pg_extension 
 
 ```powershell
 psql -U postgres -h 127.0.0.1 -c "CREATE USER devknow WITH PASSWORD 'devknow';"
-psql -U postgres -h 127.0.0.1 -c "CREATE DATABASE devknow OWNER devknow;"
-psql -U postgres -h 127.0.0.1 -d devknow -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# 必须显式指定 UTF8 + ICU 中文排序。默认按系统 locale 建库会得到 SQL_ASCII，
+# 中文入库直接报 invalid byte sequence，且事后迁移的代价远高于一次建对。
+psql -U postgres -h 127.0.0.1 -c "CREATE DATABASE devknow_utf8 OWNER devknow TEMPLATE template0 ENCODING 'UTF8' LOCALE_PROVIDER icu ICU_LOCALE 'zh-Hans';"
+
+psql -U postgres -h 127.0.0.1 -d devknow_utf8 -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-Redis 已在本机运行（`D:\Redis`，`127.0.0.1:6379`）。**第 1 周其实用不到它** ——
-限流是单机实现，Redis 到第 3 周做分布式限流才会用到。
+`application.yml` 默认连的就是 `devknow_utf8`。早期建过一个 SQL_ASCII 的 `devknow` 库，已被弃用。
+
+Redis 已在本机运行（`D:\Redis`，`127.0.0.1:6379`），但**当前仍未用到** ——
+限流是单机实现，依赖留在 POM 里是为后续做分布式限流。
 
 <details>
 <summary>替代方案（Docker Compose / 云数据库）</summary>
@@ -116,10 +326,13 @@ Redis 已在本机运行（`D:\Redis`，`127.0.0.1:6379`）。**第 1 周其实�
 
 ```powershell
 $env:GITHUB_TOKEN = 'ghp_你的真实token'
+$env:SILICONFLOW_API_KEY = 'sk-你的硅基流动key'
 java "-Dfile.encoding=UTF-8" -jar devknow-web/target/devknow.jar
 ```
 
-数据库无需设置 —— `application.yml` 的默认值（`localhost:5432/devknow`，用户 `devknow`）已与本机 PostgreSQL 一致。
+数据库无需设置 —— `application.yml` 的默认值（`localhost:5432/devknow_utf8`，用户 `devknow`）已与本机 PostgreSQL 一致。
+
+`SILICONFLOW_API_KEY` 一个 key 打通三处：向量化（`bge-m3`）、精排（`bge-reranker-v2-m3`）、对话（`DeepSeek-V3`）。**缺了它应用能启动，但检索会报 `30001 EMBEDDING_NOT_CONFIGURED`，精排静默退回 RRF。**
 
 **方式 B：永久设为 Windows 用户环境变量**（推荐，一劳永逸）
 
@@ -180,9 +393,9 @@ java "-Dfile.encoding=UTF-8" -jar devknow-web/target/devknow.jar
 > Windows 默认编码会让返回的 JSON 出现乱码（表现为 `æåå` 这类字符）。
 > 已在 POM 里锁定 `project.build.sourceEncoding=UTF-8`，但 JVM 运行期编码需显式指定。
 
-Flyway 会在启动时自动执行 `V1__init.sql` 建表。
+Flyway 会在启动时自动执行 `V1`–`V6` 六个迁移。
 
-### 4. 验证（Day 1 验收标准）
+### 4. 验证
 
 ```bash
 # ① 服务活着
@@ -192,7 +405,7 @@ curl http://localhost:8080/api/health
 # ② 配置生效、token 就位、磁盘目录正确
 curl http://localhost:8080/api/health/selfcheck
 
-# ③ 数据库表已建好（应有 5 张表 + flyway_schema_history）
+# ③ 数据库表已建好（应有 7 张表 + flyway_schema_history）
 psql -U devknow -h 127.0.0.1 -d devknow_utf8 -c "\dt"
 ```
 
@@ -202,15 +415,22 @@ psql -U devknow -h 127.0.0.1 -d devknow_utf8 -c "\dt"
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/health` | 健康检查（Day 1 验收点） |
+| GET | `/api/health` | 健康检查 |
 | GET | `/api/health/selfcheck` | 配置自检：磁盘路径、token、限流余量 |
 | POST | `/api/admin/sources` | 新建知识源（自动解析 owner/repo） |
 | GET | `/api/admin/sources` | 知识源列表 |
 | DELETE | `/api/admin/sources/{id}` | 删除（级联清理文档与 chunk） |
-| POST | `/api/admin/sources/{id}/sync?scope=all\|issues\|docs` | 触发同步，创建任务 |
+| POST | `/api/admin/sources/{id}/sync?scope=all\|issues\|docs\|chunk` | 触发同步，创建任务 |
 | GET | `/api/admin/jobs?status=PENDING&limit=50` | 查看采集任务 |
 | GET | `/api/admin/stats` | 入库统计（各类型文档数、chunk 数、死信任务数） |
 | GET | `/api/admin/github/status` | GitHub API 配额（验证 token 是否生效） |
+| POST | `/api/admin/search` | 混合检索入参 `{query, topK}`，返回 20 条以内带分数与双路排名 |
+| POST | `/api/admin/eval/run` | 跑 50 条评估集，返回 Hit@1 / Recall@5 / Recall@20 / MRR@5 与逐条明细 |
+| POST | `/api/agent/chat` | 非流式对话入参 `{agentConfigId, conversationId?, query}` |
+| POST | `/api/agent/chat/stream` | SSE 流式对话，7 类事件：`start`/`step`/`delta`/`tool`/`citation`/`done`/`error` |
+| GET | `/api/agent/conversations?agentConfigId=1` | 会话列表，按最近活跃倒序 |
+| GET | `/api/agent/conversations/{id}/messages` | 消息列表，含失败占位，供刷新恢复 |
+| DELETE | `/api/agent/conversations/{id}` | 软删除会话，重复删除返回 `40004` |
 
 ### 端到端示例
 
@@ -284,6 +504,41 @@ sha256 未变则跳过切分与向量化，能省 90% 算力。用 sha256 而不
 **验证准则**：删掉整个 `data/` 目录，应用应能正常启动和检索。
 删了就起不来，说明把 PG 当缓存用了 —— 属于设计错误。
 
+### 7. 精排的收益是局部的，不是全局的
+
+50 条评估集实测（窗口 20，同一套语料）：
+
+| 子集 | 条数 | 关 rerank · R@5 | 开 rerank · R@5 |
+|---|---|---|---|
+| overall | 50 | 0.90 | **0.96** |
+| known-item | 30 | 1.00 | 1.00 |
+| chinese | 10 | 0.80 | 0.80 |
+| symbol | 10 | 0.70 | **1.00** |
+
+总体的 +6pt **全部来自符号类查询**（`@WebMvcTest` 第 15→4、`@ServiceConnection` 未命中→第 2）。中文提问和短标题 issue 上精排反而是负收益（`cn-01` / `cn-03` 从第 1 掉到第 2）。代价是延迟 270 ms → 1116 ms。
+
+**结论**：不是"rerank 更好"，而是"rerank 买的是符号/API 类查询的召回，代价是中文与短标题查询的排序"。候选送进精排时截断 800 字符（`max-document-chars`），是这部分损失的来源之一。
+
+### 8. 相关性判断交给确定性代码，不交给模型
+
+检索"有结果"不等于"结果相关"。没有下限时，top-1 = 0.31 和 0.99 一样被包装成「检索到 5 条结果」，模型于是得自己判断相关性 —— 而提示词只写了「检索到 0 条」和「检索到相关内容」两条分支，"检索到但不相关"这一支没有任何规则，模型就掉进默认的"乐于助人"行为。
+
+修法：`SearchKnowledgeTool` 里加 `devknow.rerank.min-relevance-score`，top-1 低于阈值按 0 命中处理，让模型只面对"有结果/没结果"两个都已写好规则的分支。
+
+**阈值必须用 Agent 改写后的 query 标定**：用户问「如何实现异步任务」，实际发起检索的是「实现异步任务」，原始措辞 0.318、改写后 **0.079**。用原始输入标定会得出错误结论。
+
+### 9. "必须先检索"用结构保证，不用提示词请求
+
+多轮追问「那 Redis 呢？」时，模型看到历史里上一轮的答案，直接凭它作答并宣称"检索到了一些…"，一次工具都没调（日志 `toolCalls=0`）。提示词里补的"历史不得作为知识来源"拦不住。
+
+修法：第一步下发 `tool_choice: "required"`，把"必须先检索"从**提示词请求**升级成**结构保证**。这是和"相关度下限"同一个思路 —— 能把判断交给确定性代码的，就不要指望模型自觉。副作用是打招呼也会先检索一次，检索不到即按拒答规则回固定句，对知识库助手符合预期。
+
+### 10. 会话编排在 Controller，`AgentRunner` 不认识"会话"
+
+`AgentRunner` 是纯 ReAct 引擎，只多一个 `history` 参数；历史读写、落库、失败占位、会话归属校验全在 `AgentController`。代价是 `AgentChatResult` 要包一层 `conversationId`，收益是引擎保持纯净，单测传 `List.of()` 即可。
+
+配套的一条硬约束：**`loadContext` 必须排在 `appendUser` 之前**。反过来的话 `loadContext` 会把本轮问题当历史返回，而 Runner 内部还会再追加一次 query，同一条问题在 messages 里出现两次。
+
 ---
 
 ## 踩过的坑（值得记住）
@@ -329,44 +584,47 @@ devknow/
 │   ├── repos/{owner}/{repo} # git clone 的仓库（按 owner 分层，避免同名冲突）
 │   ├── tmp/{jobId}          # 任务临时文件，按 jobId 隔离
 │   └── logs/                # 应用日志
-├── docs/                    # 架构图、周计划、开发日报
+├── docs/                    # 各周设计文档（第三~六周）
 ├── devknow-common/          # 通用能力（无业务依赖）
 ├── devknow-domain/          # 实体 + Mapper + DTO + 枚举
-├── devknow-ingestion/       # 模块1：采集 + 解析 + 切分
-├── devknow-retrieval/       # 模块2（第3周）
-├── devknow-agent/           # 模块3（第5周）
-└── devknow-web/             # 启动模块 + Controller + 配置 + 迁移脚本
+├── devknow-ingestion/       # 采集 + 解析 + 切分 + 向量回填 + 任务队列
+├── devknow-retrieval/       # 混合检索 + 精排 + 评估跑批 + 评估集
+├── devknow-agent/           # ReAct 引擎 + 工具 + 会话 + 流式回调
+└── devknow-web/             # 启动模块 + Controller + 配置 + 迁移脚本 + 演示页
 ```
 
-**多版本怎么处理**（第 2 周）：不要每个版本 clone 一份，用一份仓库 + `git checkout <tag>`
-或 `git worktree` 检出只读工作区。
+评估脚本独立于本仓库，放在 `D:\nodejs\workspace\`（`eval_retrieval.py` / `benchmark_search.py` / `eval_agent.py`），通过 HTTP 打本服务，不引入 Python 到 Maven 构建里。
 
 ---
 
-## 待验证清单（环境已就绪，按顺序执行）
+## 验收清单
 
-> 本机 PostgreSQL 18.4 + pgvector 0.8.2 + Redis 均已运行，数据库 `devknow` 与用户已创建。
+按顺序执行，任何一步失败都先检查上一步：
 
-按顺序执行，把报错贴回来即可：
-
-1. `$env:GITHUB_TOKEN = 'ghp_...'` → 设置 token（见"配置环境变量"）
-2. `mvn clean package` → 应看到 `Tests run: 4, Failures: 0, Errors: 0`
-3. `java "-Dfile.encoding=UTF-8" -jar devknow-web/target/devknow.jar` → Flyway 执行 V1 迁移
-4. `curl http://localhost:8080/api/health` → 返回 `status: UP`
-5. `curl http://localhost:8080/api/health/selfcheck` → 确认 `githubTokenConfigured: true`
-6. `curl http://localhost:8080/api/admin/github/status` → `remaining` 应接近 5000
-7. 建源 + 触发同步 + 看统计（用上面的 curl 示例）
-8. **幂等验证**：同步完成后重新触发一次，确认 `document` 行数不变
+1. `pg_isready -h 127.0.0.1 -p 5432` → `accepting connections`
+2. `mvn -B clean package` → 应看到 `Tests run: 39, Failures: 0, Errors: 0`
+3. `java "-Dfile.encoding=UTF-8" -jar devknow-web/target/devknow.jar` → Flyway 执行到 V6
+4. `curl http://localhost:8080/api/health` → `status: UP`
+5. `curl http://localhost:8080/api/admin/github/status` → `remaining` 应接近 5000
+6. `POST /api/admin/search` body `{"query":"如何配置日志级别","topK":20}` → 返回 20 条，且带 `rerankScore`
+7. `POST /api/admin/eval/run` → Hit@1 0.80 / R@5 0.96 / R@20 0.98 / MRR@5 0.8597
+8. `POST /api/agent/chat` body `{"agentConfigId":1,"query":"如何配置多个数据源"}` → `steps=2`、`citations` 非空
+9. 打开 `http://127.0.0.1:8080/agent-demo.html` → 选一个示例问题，观察右侧原始事件流
 
 ---
 
-## 第 2 周计划
+## 后续计划
 
-- `V2__add_pgvector.sql`：`document_chunk` 增加 `embedding vector(1024)` + 部分索引；HNSW 索引在回填完成后单独建
-- `EmbeddingService` 实现：先接 SiliconFlow（bge-m3）跑通，再考虑 DJL 本地推理
-- `V2` 增量更新：按 `content_hash` 与 commit diff 只重建变化部分
-- 多版本：`git tag` 拉取 v3.1/v3.2，写入 `version` 与 `version_order`
-- 目标：**1 万 chunk 入库且带完整 `heading_path`**
+- **第 7 周（收尾）**：评测数字定稿、并发压测、部署说明
+- **第 8 周**：README 与各周文档校订、技术博客
+
+已识别但未做的改动：
+
+- 候选池按"单路最好名次"截断，可把 100 候选压到 40 左右而不丢召回，预计省 300 ms
+- Query 向量缓存（端到端 270 ms 里有约 250 ms 花在在线嵌入，是唯一有数量级收益的优化点）
+- 用 token 数替代字符数做 chunk 硬上限
+- 用 50 条评估集的实际 top-1 分布重新校准拒答阈值（当前 0.4 来自 9 条抽样）
+- 会话列表分页（当前固定 `LIMIT 100`）、演示页把 `conversationId` 存 localStorage
 
 ---
 
