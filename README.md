@@ -6,7 +6,7 @@
 本项目在数据模型里保留 `version` 与 `version_order`，让检索可以按版本硬过滤。
 
 > 目标岗位方向：Java 后端 / Java + 智能体。
-> 8 周计划，第 1–6 周已完成，当前处于 **第 7 周（评测 + 压测 + 部署）**。
+> 8 周计划，第 1–7 周已完成；第 8 周已完成**上下文摘要压缩**与**演示页改版**，剩余部署与文档校订。
 
 ---
 
@@ -14,16 +14,16 @@
 
 | 项 | 状态 |
 |---|---|
-| 构建 | ✅ `mvn test` 全绿（39 个用例），可执行包 `devknow.jar` 已产出 |
-| 模块 | ✅ 6 个模块齐备（common / domain / ingestion / retrieval / agent / web），主代码 91 个 Java 文件 |
-| 数据库迁移 | ✅ Flyway V1–V6 已执行：建表 / pgvector / 全文索引 / 点号归一化 / Agent 配置 seed / 会话表 |
+| 构建 | ✅ `mvn test` 全绿（57 个用例），可执行包 `devknow.jar` 已产出 |
+| 模块 | ✅ 6 个模块齐备（common / domain / ingestion / retrieval / agent / web），主代码 94 个 Java 文件 |
+| 数据库迁移 | ✅ Flyway V1–V7 已执行：建表 / pgvector / 全文索引 / 点号归一化 / Agent 配置 seed / 会话表 / 会话摘要 |
 | 采集 | ✅ GitHub issue + PR + 仓库文档三路，任务状态机 + 幂等落库 + 死信回收 |
 | 语料规模 | ✅ 5344 篇 document（216 Doc + 4318 Issue + 810 PR），8580 个 chunk |
 | 切分与向量化 | ✅ `HeadingChunker` 按标题层级切分并维护 `heading_path`；bge-m3 1024 维，覆盖率 100% |
 | 检索 | ✅ PostgreSQL 全文（`ts_rank`）+ pgvector（HNSW）+ RRF(k=60) + cross-encoder 精排 |
-| Agent | ✅ ReAct 循环（`max_steps=8`）+ 工具调用 + 相关度阈值拒答 + 会话持久化 + SSE 7 类事件 |
-| 前端 | ✅ `static/agent-demo.html` 演示页，纯 HTML/CSS/JS 无构建步骤，支持多轮 |
-| 评测 | ✅ 50 条检索评估集 + 20 条库外集 + 3 个 Python 评估/压测脚本（检索 A/B、并发压测、Agent 端到端） |
+| Agent | ✅ ReAct 循环（`max_steps=8`）+ 工具调用 + 相关度阈值拒答 + 会话持久化 + **上下文摘要压缩** + SSE 7 类事件 |
+| 前端 | ✅ 满屏三栏演示页（会话列表 / 对话 / 依据+事件流），首字前思考态动画、刷新恢复当前会话 |
+| 评测 | ✅ 50 条检索集 + 20 条库外集 + 4 个 Python 脚本（检索 A/B、并发压测、Agent 端到端、TTFT 30 条） |
 
 ### 代码规模
 
@@ -33,9 +33,9 @@
 | devknow-domain | 29 | 1 | 7 个实体 + 7 个 Mapper + 11 个 DTO + 4 个枚举 + **迁移一致性测试** |
 | devknow-ingestion | 22 | 1 | GitHub 采集、仓库文档同步、解析、切分、索引、向量回填、任务队列 |
 | devknow-retrieval | 10 | 0 | 混合检索、嵌入客户端、精排客户端、评估跑批 |
-| devknow-agent | 12 | 2 | ReAct 引擎、LLM 客户端、工具、会话服务、流式回调 |
+| devknow-agent | 15 | 4 | ReAct 引擎、LLM 客户端、工具、会话服务、**摘要压缩**、流式回调 |
 | devknow-web | 8 | 0 | 启动类、4 个 Controller、全局异常、SSE 配置、迁移脚本、演示页 |
-| **合计** | **91** | **4** | 39 个测试用例 |
+| **合计** | **94** | **6** | 57 个测试用例 |
 
 ---
 
@@ -537,7 +537,73 @@ sha256 未变则跳过切分与向量化，能省 90% 算力。用 sha256 而不
 
 `AgentRunner` 是纯 ReAct 引擎，只多一个 `history` 参数；历史读写、落库、失败占位、会话归属校验全在 `AgentController`。代价是 `AgentChatResult` 要包一层 `conversationId`，收益是引擎保持纯净，单测传 `List.of()` 即可。
 
-配套的一条硬约束：**`loadContext` 必须排在 `appendUser` 之前**。反过来的话 `loadContext` 会把本轮问题当历史返回，而 Runner 内部还会再追加一次 query，同一条问题在 messages 里出现两次。
+配套的一条硬约束：**`loadContext` 必须排在 `appendUser` 之前**。反过来的话 `loadContext` 会把本轮问题当历史返回，而 Runner 内部还会再追加一次 query，同一条消息在 messages 里出现两次。
+
+### 11. 上下文摘要压缩：压"被丢掉的"，不压"窗口里的"
+
+长会话超出 4000 token / 10 条后，早期对话原本是直接丢的 —— 界面上还看得见，模型已经不知道了。V7 加了两列：`conversation.summary` 存滚动摘要，`summary_upto_seq` 存**水位线**（已压到第几条消息）。
+
+三条约束缺一不可：
+
+- **只压窗口外**：`seq < 窗口最小 seq` 且 `seq > 水位`，与原文窗口永不重叠，否则模型对同一句话看到两遍
+- **水位单调推进**：写库带 `AND summary_upto_seq = 期望值`（CAS），并发的两次压缩只有一次生效，另一次丢弃结果
+- **失败退回硬丢**：任何异常都不阻塞主链路，摘要是优化不是依赖
+
+摘要注入时带一句硬约束：「仅用于理解指代，**不得作为事实来源**」。少了它，摘要是继模型记忆、检索噪声之后的第三条幻觉通道，而且看起来最像"已确认的事实"。
+
+实测（一个会话连问 10 轮）：第 8 轮首次触发（历史 14 条、窗口保留 10 条、丢 4 条），`seq 0 → 4`、摘要 224 字；第 10 轮 `seq 4 → 8`、238 字。单次摘要 `prompt_tokens` 1313 → 466，第二次带旧摘要只压新一段，便宜一倍多。
+
+按真实 `TokenEstimator` 口径（中文 1 字 1 token、其余 4 字符 1 token），一轮长回答约 500 token，所以 **4000 预算先撞到的是 10 条那个条数上限**，不是 token。
+
+---
+
+## 实测数字
+
+脚本在 `D:\nodejs\workspace\`（`eval_retrieval.py` / `benchmark_search.py` / `eval_agent.py` / `eval_ttft.py`），全部走 HTTP 打本服务，不进 Maven 构建。本机 loopback，无网络开销。
+
+### 检索 A/B（50 条标注集，候选窗口 20）
+
+| 指标 | 关精排 | 开精排 |
+|---|---|---|
+| Hit@1 | 0.80 | 0.80 |
+| Recall@5 | 0.90 | **0.96** |
+| Recall@20 | 0.94 | 0.98 |
+| MRR@5 | 0.8467 | **0.8597** |
+| 端到端延迟 | 270 ms | 1116 ms |
+
+增益集中在符号/API 类查询（R@5 0.70 → 1.00）；known-item 与中文子集反而略降。同配置两次跑批排序逐条一致。
+
+### Agent 端到端（70 条：50 库内 + 20 库外）
+
+| 指标 | 值 |
+|---|---|
+| 库内误拒 | 0 / 50 |
+| 库外正确拒答 | 20 / 20 |
+| 引用命中 | 96%（48/50，两次未命中与检索 R@5 未命中完全重合） |
+| 步数 | 全部 2 步 |
+
+### 首字延迟 TTFT（30 条，串行）
+
+| 指标 | 值 |
+|---|---|
+| 平均值 | **4994 ms** |
+| 中位数 / P95 | 4822 / 5811 ms |
+| 最小 / 最大 | 3639 / 8114 ms |
+| 标准差 | 826 ms |
+
+拆开看：第一次模型调用（产出 `tool_calls`）2483 ms、检索 1279 ms、第二次模型调用首 token 1233 ms —— **74% 在模型，26% 在检索**。
+
+### 并发压测（关精排，单次检索）
+
+| 并发 | QPS | P50 | P95 |
+|---|---|---|---|
+| 1 | 3.94 | 234 ms | 362 ms |
+| 5 | 17.97 | 259 ms | 355 ms |
+| 20 | 42.27 | 425 ms | 675 ms |
+
+### 串行 30 条的代价
+
+每条 14.3 s、30 条约 7 分钟。TTFT 波动主要来自模型服务侧（最快 3.6 s、最慢 8.1 s），同一份代码同一批查询。
 
 ---
 
@@ -593,7 +659,7 @@ devknow/
 └── devknow-web/             # 启动模块 + Controller + 配置 + 迁移脚本 + 演示页
 ```
 
-评估脚本独立于本仓库，放在 `D:\nodejs\workspace\`（`eval_retrieval.py` / `benchmark_search.py` / `eval_agent.py`），通过 HTTP 打本服务，不引入 Python 到 Maven 构建里。
+评估脚本独立于本仓库，放在 `D:\nodejs\workspace\`（`eval_retrieval.py` / `benchmark_search.py` / `eval_agent.py` / `eval_ttft.py`），通过 HTTP 打本服务，不引入 Python 到 Maven 构建里。
 
 ---
 
@@ -602,21 +668,22 @@ devknow/
 按顺序执行，任何一步失败都先检查上一步：
 
 1. `pg_isready -h 127.0.0.1 -p 5432` → `accepting connections`
-2. `mvn -B clean package` → 应看到 `Tests run: 39, Failures: 0, Errors: 0`
-3. `java "-Dfile.encoding=UTF-8" -jar devknow-web/target/devknow.jar` → Flyway 执行到 V6
+2. `mvn -B clean package` → 应看到 `Tests run: 57, Failures: 0, Errors: 0`
+3. `java "-Dfile.encoding=UTF-8" -jar devknow-web/target/devknow.jar` → Flyway 执行到 V7
 4. `curl http://localhost:8080/api/health` → `status: UP`
 5. `curl http://localhost:8080/api/admin/github/status` → `remaining` 应接近 5000
 6. `POST /api/admin/search` body `{"query":"如何配置日志级别","topK":20}` → 返回 20 条，且带 `rerankScore`
 7. `POST /api/admin/eval/run` → Hit@1 0.80 / R@5 0.96 / R@20 0.98 / MRR@5 0.8597
 8. `POST /api/agent/chat` body `{"agentConfigId":1,"query":"如何配置多个数据源"}` → `steps=2`、`citations` 非空
-9. 打开 `http://127.0.0.1:8080/agent-demo.html` → 选一个示例问题，观察右侧原始事件流
+9. 打开 `http://127.0.0.1:8080/agent-demo.html` → 选一个示例问题，观察首字前的思考态、右侧事件流、左栏会话列表
+10. 刷新页面 → 地址栏仍是 `?c=<会话id>`，对话被恢复（历史回答不播思考动画）
+11. 同一会话连问 8 轮以上 → `select summary, summary_upto_seq from conversation where id=?` 应非空
 
 ---
 
 ## 后续计划
 
-- **第 7 周（收尾）**：评测数字定稿、并发压测、部署说明
-- **第 8 周**：README 与各周文档校订、技术博客
+- **第 8 周剩余**：部署说明、README 与各周文档校订、技术博客
 
 已识别但未做的改动：
 
@@ -624,7 +691,10 @@ devknow/
 - Query 向量缓存（端到端 270 ms 里有约 250 ms 花在在线嵌入，是唯一有数量级收益的优化点）
 - 用 token 数替代字符数做 chunk 硬上限
 - 用 50 条评估集的实际 top-1 分布重新校准拒答阈值（当前 0.4 来自 9 条抽样）
-- 会话列表分页（当前固定 `LIMIT 100`）、演示页把 `conversationId` 存 localStorage
+- **摘要压缩缺多轮评估集**：现在只能证明"写出了摘要"，证明不了"模型因此少失忆"
+- 摘要不参与检索、无分层归档（每 300 token 封存一段）——真需要更长记忆时再做
+- 会话列表后端固定 `LIMIT 100`，前端只折叠展示 20 条，都没有真分页
+- 会话深链只靠地址栏 `?c=`，换浏览器或存书签之外的方式会丢当前会话
 
 ---
 
