@@ -78,6 +78,8 @@
     convs: document.getElementById('convs'),
     convCount: document.getElementById('conv-count'),
     convRefresh: document.getElementById('conv-refresh'),
+    convsFoot: document.getElementById('convs-foot'),
+    convMore: document.getElementById('conv-more'),
   };
 
   let controller = null;   // 当前请求的 AbortController
@@ -344,16 +346,9 @@
     }
 
     const rest = convAll.length - Math.min(convShown, convAll.length);
+    el.convsFoot.hidden = rest <= 0;
     if (rest > 0) {
-      const more = document.createElement('button');
-      more.type = 'button';
-      more.className = 'conv-more';
-      more.textContent = `还有 ${rest} 条 · 显示更早的`;
-      more.addEventListener('click', () => {
-        convShown += CONV_PAGE;
-        renderConversations();
-      });
-      el.convs.appendChild(more);
+      el.convMore.textContent = `还有 ${rest} 条 · 显示更早的`;
     }
   }
 
@@ -982,6 +977,11 @@
   el.convRefresh.addEventListener('click', () => {
     convShown = CONV_PAGE;      // 手动刷新顺手收起，回到最近一页
     loadConversations();
+  });
+
+  el.convMore.addEventListener('click', () => {
+    convShown += CONV_PAGE;
+    renderConversations();
   });
 
   // 换 agentConfigId 相当于换一套智能体，会话列表要跟着换

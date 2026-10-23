@@ -30,6 +30,11 @@
           <button class="ghost small" type="button" id="conv-refresh">刷新</button>
         </div>
         <div class="convs" id="convs"></div>
+        <!-- 分页按钮钉在列表下方而不是跟着列表滚：会话一多，它跟在最后面
+             等于要用户先滚到底才看得见 -->
+        <div class="convs-foot" id="convs-foot" hidden>
+          <button class="ghost small conv-more" type="button" id="conv-more"></button>
+        </div>
       </aside>
 
       <section class="panel chat">

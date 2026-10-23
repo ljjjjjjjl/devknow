@@ -42,11 +42,13 @@ body {
   overflow: hidden;               /* 滚动交给面板内部，避免内外两套滚动条 */
 }
 
+/* 满屏应用壳：不留外边距，三栏直接吃满视口。
+   滚动全部发生在栏内，页面本身不滚 —— 所以 body 上是 overflow:hidden。 */
 .page {
-  max-width: 1240px;
-  height: 100%;
-  margin: 0 auto;
-  padding: 14px 18px 16px;
+  max-width: none;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
 }
@@ -58,8 +60,7 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding-bottom: 10px;
-  margin-bottom: 12px;
+  padding: 10px 16px;
   position: relative;
 }
 
@@ -112,9 +113,9 @@ code { font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
   flex: 1;
   min-height: 0;                  /* 关键：少了它子项以内容高度为最小高度，滚动容器会被撑破 */
   display: grid;
-  /* 三栏：会话列表 / 回答 / 依据+过程。列表定宽，中间吸收剩余宽度 */
-  grid-template-columns: 216px minmax(0, 1fr) 320px;
-  gap: 14px;
+  /* 三栏贴边：会话列表 / 回答 / 依据+过程。列之间用 1px 分隔线，不再用间距 */
+  grid-template-columns: 232px minmax(0, 1fr) 320px;
+  gap: 0;
 }
 
 .panel {
@@ -122,10 +123,13 @@ code { font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
   display: flex;
   flex-direction: column;
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  border: 0;
+  border-right: 1px solid var(--line);   /* 只画右边界，最右一栏去掉（见下） */
+  border-radius: 0;
   overflow: hidden;
 }
+
+.layout > .panel:last-child { border-right: 0; }
 
 /* ---------- 消息区 ---------- */
 
@@ -600,7 +604,8 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 8px 10px;
+  /* 底部多留一截：最后一条不要贴着分页按钮，滚动到底时有"到这儿为止"的呼吸感 */
+  padding: 0 8px 18px;
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -608,23 +613,25 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
      滚动能力保留（滚轮、触摸板、方向键照常），只是不再画那条轨道 */
   scrollbar-width: none;
   -ms-overflow-style: none;
+  /* 下边缘淡出：代替滚动条告诉用户"下面还有"，也顺手盖住被裁掉半行的那一条 */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
 }
 
 .convs::-webkit-scrollbar { width: 0; height: 0; }
 
-/* 上下边缘淡出，代替滚动条给"上面/下面还有"的提示 */
-.convs-panel { position: relative; }
-.convs-panel::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 18px;
-  pointer-events: none;
-  z-index: 0;
-  background: linear-gradient(rgba(22, 27, 34, 0), var(--panel));
+/* 分页按钮固定在列表下方（不在滚动区内），永远可见。
+   加一条上边线 + 不透明底色，让它读起来是"页脚"而不是被裁掉的列表项 */
+.convs-foot {
+  flex: none;
+  padding: 8px 10px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
 }
+
+.convs-foot[hidden] { display: none; }
+
+.convs .conv-more { width: 100%; }
 
 .convs:empty::before {
   content: '还没有会话，问一句就会出现';
@@ -706,23 +713,15 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
 .conv-del:hover { color: var(--err); background: rgba(248, 81, 73, .16); }
 
 /* 默认只渲染最近 20 条。45 条全铺出来一屏都是标题，反而找不到想翻的那条。
-   按钮吸在列表底部：20 条本来就超出一屏，跟在最后面等于要用户先滚到底才看得见它 */
+   按钮本身钉在 .convs-foot 里（不在滚动区内），所以这里只负责长相 */
 .conv-more {
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
-  margin-top: 4px;
-  padding: 6px 8px;
+  padding: 6px 9px;
   border: 1px dashed var(--line);
   border-radius: 8px;
-  background: var(--panel);
+  background: transparent;
   color: var(--dim);
-  font: inherit;
-  font-size: 11.5px;
-  cursor: pointer;
   text-align: center;
   transition: color .15s, border-color .15s, background .15s;
-  box-shadow: 0 -10px 16px -10px rgba(0, 0, 0, .6);
 }
 
 .conv-more:hover {
@@ -740,15 +739,31 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
 
 /* ---------- 窄屏 / 矮窗口回退 ---------- */
 
-/* 三栏在 1100px 以下收窄两边的定宽列，中间仍吃剩余宽度 */
-@media (max-width: 1100px) {
-  .layout { grid-template-columns: 176px minmax(0, 1fr) 272px; gap: 10px; }
+/* ---------- 响应式 ---------- */
+
+/* 1280 以下先收右栏（引用/事件流可以窄一点，正文不该窄） */
+@media (max-width: 1280px) {
+  .layout { grid-template-columns: 208px minmax(0, 1fr) 288px; }
 }
 
+/* 1080 以下连会话列表一起收，正文仍吃剩余宽度 */
+@media (max-width: 1080px) {
+  .layout { grid-template-columns: 168px minmax(0, 1fr) 248px; }
+  .head { padding: 10px 12px; }
+  .sub { display: none; }        /* 标题栏先牺牲副标题，别让它挤掉状态灯 */
+}
+
+/* 900 以下三栏堆叠：分隔线从"竖"改成"横" */
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
+  .panel {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .layout > .panel:last-child { border-bottom: 0; }
   /* 堆叠后会话列表变成顶部一条可滚动的带子 */
-  .convs-panel { max-height: 26vh; }
+  .convs-panel { max-height: 34vh; }
+  .convs-foot { padding-bottom: 10px; }
 }
 
 /* 视口塞不下两个面板时退回文档流，各自限高。
