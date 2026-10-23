@@ -20,6 +20,18 @@
 
     <main class="layout">
 
+      <!-- 左栏：会话列表。数据全部来自 GET /api/agent/conversations，
+           浏览器不缓存消息正文 —— 点开哪个会话就现拉哪个。
+           服务端是唯一事实来源，于是不存在"本地缓存比库新"这类不一致。 -->
+      <aside class="panel convs-panel">
+        <div class="side-head">
+          <h2>会话</h2>
+          <span class="count" id="conv-count">0</span>
+          <button class="ghost small" type="button" id="conv-refresh">刷新</button>
+        </div>
+        <div class="convs" id="convs"></div>
+      </aside>
+
       <section class="panel chat">
         <!-- wrap 只用来给"跳到最新"按钮定位，滚动发生在里面的 .messages -->
         <div class="messages-wrap">

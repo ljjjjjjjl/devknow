@@ -106,14 +106,15 @@ code { font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 
-/* ---------- 布局：左回答 / 右依据+过程 ---------- */
+/* ---------- 布局：左会话列表 / 中回答 / 右依据+过程 ---------- */
 
 .layout {
   flex: 1;
   min-height: 0;                  /* 关键：少了它子项以内容高度为最小高度，滚动容器会被撑破 */
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 16px;
+  /* 三栏：会话列表 / 回答 / 依据+过程。列表定宽，中间吸收剩余宽度 */
+  grid-template-columns: 216px minmax(0, 1fr) 320px;
+  gap: 14px;
 }
 
 .panel {
@@ -590,10 +591,108 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
   user-select: none;
 }
 
+/* ---------- 会话列表 ---------- */
+
+/* 列表项只放标题 + 相对时间。不显示消息正文摘要：
+   那要么多一次查询，要么在服务端多存一份派生数据，为了一行预览不值得 */
+
+.convs {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.convs:empty::before {
+  content: '还没有会话，问一句就会出现';
+  display: block;
+  padding: 4px 7px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.conv-item {
+  position: relative;
+  padding: 7px 26px 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+
+.conv-item:hover { background: var(--panel-2); border-color: var(--line); }
+
+/* 当前会话：蓝边框 + 淡底，跟右侧"会话 #90"药丸是同一个语义 */
+.conv-item.active {
+  background: rgba(76, 141, 255, .13);
+  border-color: rgba(76, 141, 255, .45);
+}
+
+.conv-item .t {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.conv-item .m {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
+.conv-item.active .m { color: var(--accent); }
+
+/* 删除按钮平时透明，hover / 选中才露头 —— 常驻会让列表看起来像一堆叉 */
+.conv-del {
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dim);
+  font: 12px/1 var(--mono);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s, color .15s, background .15s;
+}
+
+.conv-item:hover .conv-del,
+.conv-item.active .conv-del { opacity: 1; }
+
+.conv-del:hover { color: var(--err); background: rgba(248, 81, 73, .16); }
+
+/* 历史消息里的失败 / 空回答：用弱化的斜体说明，不要渲染成正常正文，
+   否则用户会以为这就是模型当时的回答 */
+.answer-body.muted {
+  color: var(--dim);
+  font-style: italic;
+}
+
 /* ---------- 窄屏 / 矮窗口回退 ---------- */
+
+/* 三栏在 1100px 以下收窄两边的定宽列，中间仍吃剩余宽度 */
+@media (max-width: 1100px) {
+  .layout { grid-template-columns: 176px minmax(0, 1fr) 272px; gap: 10px; }
+}
 
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
+  /* 堆叠后会话列表变成顶部一条可滚动的带子 */
+  .convs-panel { max-height: 26vh; }
 }
 
 /* 视口塞不下两个面板时退回文档流，各自限高。

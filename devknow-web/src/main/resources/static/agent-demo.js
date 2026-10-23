@@ -75,6 +75,9 @@
     clearLog: document.getElementById('clear-log'),
     status: document.getElementById('status'),
     statusText: document.getElementById('status-text'),
+    convs: document.getElementById('convs'),
+    convCount: document.getElementById('conv-count'),
+    convRefresh: document.getElementById('conv-refresh'),
   };
 
   let controller = null;   // 当前请求的 AbortController
@@ -187,6 +190,8 @@
     }
     conversationId = null;
     updateConv();
+    syncUrl(null);
+    setActiveConv(null);
 
     el.messages.textContent = '';
     el.messages.appendChild(el.empty);
@@ -229,6 +234,254 @@
     const active = conversationId !== null;
     el.conv.textContent = active ? `会话 #${conversationId}` : '尚未开始';
     el.conv.classList.toggle('active', active);
+  }
+
+  // ---------------------------------------------------------------- 会话列表
+
+  /**
+   * 浏览器的存储策略：**不存任何东西**。
+   *
+   * <p>刷新后靠网址上的 {@code ?c=90} 找回当前会话；没有参数就是空状态。
+   * 之所以不落 localStorage：这个项目没有用户体系，本地存 id 只能解决"同一浏览器"，
+   * 而消息正文一律现拉，本地缓存反而引入"缓存比库新/旧"的同步问题。
+   *
+   * <p>没做成"自动打开最近一个会话"也是刻意的：那样用户点「新会话」再刷新，
+   * 会莫名其妙续上他想丢掉的那段上下文。
+   */
+  const URL_PARAM = 'c';
+
+  function currentConfigId() {
+    return Number(el.configId.value) || 1;
+  }
+
+  /** 把当前会话写进地址栏，刷新、前进后退都能回来 */
+  function syncUrl(id) {
+    const url = new URL(window.location.href);
+    if (id === null) {
+      url.searchParams.delete(URL_PARAM);
+    } else {
+      url.searchParams.set(URL_PARAM, String(id));
+    }
+    history.replaceState(null, '', url);
+  }
+
+  /** 统一的 JSON 请求：解包 ApiResponse，非 2xx / success=false 一律抛错 */
+  async function apiJSON(url, options) {
+    const resp = await fetch(url, options);
+    const text = await resp.text();
+    let body = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch (_) {
+      /* 非 JSON（如 5xx 的默认错误页），下面按状态码处理 */
+    }
+    if (!resp.ok || (body && body.success === false)) {
+      const e = new Error((body && body.message) || `HTTP ${resp.status}`);
+      e.code = body && body.code;
+      throw e;
+    }
+    return body ? body.data : null;
+  }
+
+  async function loadConversations() {
+    let list;
+    try {
+      list = await apiJSON(`/api/agent/conversations?agentConfigId=${currentConfigId()}`);
+    } catch (e) {
+      setHint(`会话列表加载失败：${e.message}`);
+      return;
+    }
+    renderConversations(Array.isArray(list) ? list : []);
+  }
+
+  function renderConversations(list) {
+    el.convs.textContent = '';
+    el.convCount.textContent = String(list.length);
+
+    for (const c of list) {
+      const item = document.createElement('div');
+      item.className = 'conv-item' + (c.id === conversationId ? ' active' : '');
+      item.dataset.id = String(c.id);
+      item.title = c.title || '(无标题)';
+      item.addEventListener('click', () => openConversation(c.id));
+
+      const title = document.createElement('span');
+      title.className = 't';
+      title.textContent = c.title || '(无标题)';
+
+      const meta = document.createElement('span');
+      meta.className = 'm';
+      meta.textContent = `#${c.id} · ${formatWhen(c.updatedAt || c.createdAt)}`;
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'conv-del';
+      del.textContent = '×';
+      del.title = '删除这个会话（软删，库里仍保留）';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();     // 别同时触发 item 的点击，否则会先打开再删
+        removeConversation(c.id);
+      });
+
+      item.append(title, meta, del);
+      el.convs.appendChild(item);
+    }
+  }
+
+  function setActiveConv(id) {
+    for (const item of el.convs.children) {
+      item.classList.toggle('active', Number(item.dataset.id) === id);
+    }
+  }
+
+  /** 相对时间：今天只显示时分，其余显示月-日 */
+  function formatWhen(iso) {
+    if (!iso) {
+      return '';
+    }
+    const t = new Date(iso);
+    if (Number.isNaN(t.getTime())) {
+      return '';
+    }
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    if (t.toDateString() === now.toDateString()) {
+      return `${pad(t.getHours())}:${pad(t.getMinutes())}`;
+    }
+    return `${t.getMonth() + 1}-${t.getDate()}`;
+  }
+
+  /**
+   * 打开一个历史会话：清空消息区，按 seq 顺序重放。
+   *
+   * <p>历史回答**不播**思考态动画 —— 那是"正在等"的信号，回放时给出来只会误导。
+   * 同时直接画正文和引用数，步数/耗时这些只在实时生成时才有意义。
+   */
+  async function openConversation(id) {
+    if (streaming) {
+      setHint('正在生成中，等这一条结束或点"停止"再切换');
+      return;
+    }
+    let views;
+    try {
+      views = await apiJSON(`/api/agent/conversations/${id}/messages`);
+    } catch (e) {
+      if (e.code === 40004) {
+        // 会话已被删掉：静默清掉地址栏参数并回到空状态，弹错误框只会让人以为页面坏了
+        syncUrl(null);
+        setActiveConv(null);
+        loadConversations();
+        return;
+      }
+      setHint(`会话加载失败：${e.message}`);
+      return;
+    }
+
+    conversationId = id;
+    updateConv();
+    syncUrl(id);
+    setActiveConv(id);
+    renderHistory(Array.isArray(views) ? views : []);
+    setStatus('idle', '已载入历史会话');
+    setHint(`已载入会话 #${id}，接着问会继续这段上下文`);
+  }
+
+  async function removeConversation(id) {
+    if (streaming) {
+      setHint('正在生成中，等这一条结束或点"停止"再删除');
+      return;
+    }
+    try {
+      await apiJSON(`/api/agent/conversations/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      setHint(`删除失败：${e.message}`);
+      return;
+    }
+    if (id === conversationId) {
+      newConversation();
+      setHint('已删除当前会话');
+    } else {
+      setHint(`已删除会话 #${id}`);
+    }
+    loadConversations();
+  }
+
+  /** 清空消息区，但保留 #empty 节点本身（示例按钮的点击委托挂在它上面） */
+  function clearMessages() {
+    for (const child of [...el.messages.children]) {
+      if (child !== el.empty) {
+        child.remove();
+      }
+    }
+    if (el.empty.parentNode) {
+      el.empty.remove();
+    }
+  }
+
+  function renderHistory(views) {
+    clearMessages();
+    el.cites.textContent = '';
+    el.citeCount.textContent = '0';
+
+    if (!views.length) {
+      el.messages.appendChild(el.empty);
+      renderSamples();
+      updateJump();
+      return;
+    }
+
+    let lastAssistant = null;
+    for (const m of views) {
+      if (m.role === 'user') {
+        appendUserBubble(m.content || '');
+      } else {
+        lastAssistant = appendSettledAnswer(m);
+      }
+    }
+
+    // 右栏只展示"最后一轮回答"的引用：历史会话里逐轮累加会把面板淹掉
+    for (const c of (lastAssistant && lastAssistant.citations) || []) {
+      addCitation(c);
+    }
+    scrollToBottom();
+  }
+
+  /**
+   * 画一条历史回答（不是流式生成的）。
+   *
+   * <p>三种状态必须分开渲染，否则用户会把"当时失败了"读成"模型就是这么答的"：
+   * 正常正文 / 失败占位（error 非空）/ 只有提问没有回答（content 为空）。
+   */
+  function appendSettledAnswer(m) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble answer';
+
+    const body = document.createElement('div');
+    body.className = 'answer-body';
+    if (m.error) {
+      body.classList.add('muted');
+      body.textContent = `（这一轮中断了：${m.error}）`;
+    } else if (!m.content) {
+      body.classList.add('muted');
+      body.textContent = '（这一轮没有生成回答）';
+    } else {
+      body.textContent = m.content;
+    }
+    bubble.appendChild(body);
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    if (!m.error) {
+      const n = (m.citations || []).length;
+      meta.appendChild(badge(`${n} 条引用`));
+    }
+
+    wrap.append(bubble, meta);
+    el.messages.appendChild(wrap);
+    return { citations: m.citations || [] };
   }
 
   // ---------------------------------------------------------------- 主流程
@@ -371,6 +624,10 @@
         // 会话 id 到手。第一轮之后每轮都带上它，追问才能接上上下文
         conversationId = data.conversationId;
         updateConv();
+        // 首轮会新建会话：立刻写进地址栏，并把列表刷出来让它出现在最上面
+        syncUrl(conversationId);
+        setActiveConv(conversationId);
+        loadConversations();
         card.setStage('会话已就绪，正在规划检索…');
         break;
 
@@ -430,6 +687,8 @@
         setStatus('ok', '完成', ` · ${data.elapsedMs} ms`);
         setHint('');
         follow(stick);
+        // 这一轮的问题和回答刚写进库，列表的标题/时间需要跟着更新
+        loadConversations();
         break;
 
       case 'error':
@@ -690,4 +949,28 @@
   // 首屏就填一批示例问题（每次刷新都不一样）
   renderSamples();
   updateConv();
+
+  el.convRefresh.addEventListener('click', loadConversations);
+
+  // 换 agentConfigId 相当于换一套智能体，会话列表要跟着换
+  el.configId.addEventListener('change', () => {
+    if (streaming) {
+      return;
+    }
+    conversationId = null;
+    updateConv();
+    syncUrl(null);
+    setActiveConv(null);
+    loadConversations();
+  });
+
+  // 刷新后靠地址栏上的 ?c= 找回当前会话；没有就当空状态，不自动续上"最近一个"
+  (function restoreFromUrl() {
+    // 列表必须无条件加载：先渲染再打开会话，否则左栏会是空的（选中态也就无处可标）
+    loadConversations();
+    const id = Number(new URL(window.location.href).searchParams.get(URL_PARAM));
+    if (Number.isInteger(id) && id > 0) {
+      openConversation(id);
+    }
+  })();
 })();
