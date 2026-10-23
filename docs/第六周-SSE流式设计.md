@@ -143,12 +143,12 @@
 
 | 文件 | 说明 |
 |---|---|
-| `devknow-agent/.../stream/AgentStreamListener.java` | 新增，流式回调接口 |
-| `devknow-agent/.../client/ChatClient.java` | 加 `streamChat`，抽出请求体组装 |
-| `devknow-agent/.../engine/AgentRunner.java` | 循环收成一份，加 `stream` |
-| `devknow-agent/src/test/.../AgentRunnerTest.java` | 新增，7 个用例，mock `ChatClient` |
-| `devknow-web/.../config/AgentStreamConfig.java` | 新增，对话专用虚拟线程执行器 |
-| `devknow-web/.../controller/AgentController.java` | 加 `POST /api/agent/chat/stream` |
+| `devknow-agent/src/main/java/com/devknow/agent/stream/AgentStreamListener.java` | 新增，流式回调接口 |
+| `devknow-agent/src/main/java/com/devknow/agent/client/ChatClient.java` | 加 `streamChat`，抽出请求体组装 |
+| `devknow-agent/src/main/java/com/devknow/agent/engine/AgentRunner.java` | 循环收成一份，加 `stream` |
+| `devknow-agent/src/test/java/com/devknow/agent/engine/AgentRunnerTest.java` | 新增，7 个用例，mock `ChatClient` |
+| `devknow-web/src/main/java/com/devknow/web/config/AgentStreamConfig.java` | 新增，对话专用虚拟线程执行器 |
+| `devknow-web/src/main/java/com/devknow/web/controller/AgentController.java` | 加 `POST /api/agent/chat/stream` |
 | `devknow-web/src/main/resources/static/agent-demo.html` | 新增，演示页 |
 | `devknow-web/src/main/resources/static/agent-demo.css` | 新增，演示页样式 |
 | `devknow-web/src/main/resources/static/agent-demo.js` | 新增，SSE 解析与渲染 |
@@ -158,29 +158,29 @@
 | 文件 | 说明 |
 |---|---|
 | `devknow-web/src/main/resources/db/migration/V6__add_conversation.sql` | 新增，两张表 + CHECK 约束 + V1 预留字段的差异说明 |
-| `devknow-domain/.../entity/Conversation.java` | 新增，会话实体 |
-| `devknow-domain/.../entity/ConversationMessage.java` | 新增，消息实体（`citations` 用 String 承载 jsonb） |
-| `devknow-domain/.../enums/ConversationEnums.java` | 新增，`ConversationStatus` / `MessageRole` |
-| `devknow-domain/.../mapper/ConversationMapper.java` | 新增，列表（部分索引）/ touch / 软删 |
-| `devknow-domain/.../mapper/ConversationMessageMapper.java` | 新增，手写 INSERT + `CAST AS jsonb`、`nextSeq`、过滤失败占位 |
-| `devknow-domain/.../dto/AgentChatResult.java` | 新增，非流式返回会话 id 的包装（不让 Runner 认识会话） |
-| `devknow-domain/.../dto/ConversationMessageView.java` | 新增，把 jsonb 文本解析成 `List<Citation>` |
-| `devknow-common/.../util/TokenEstimator.java` | 新增，token 估算收口到 common（原先有两份副本） |
-| `devknow-agent/.../conversation/ConversationService.java` | 新增，会话读写 + 上下文裁剪 |
-| `devknow-agent/src/test/.../conversation/ConversationServiceTest.java` | 新增，7 个裁剪边界用例，不连库 |
+| `devknow-domain/src/main/java/com/devknow/domain/entity/Conversation.java` | 新增，会话实体 |
+| `devknow-domain/src/main/java/com/devknow/domain/entity/ConversationMessage.java` | 新增，消息实体（`citations` 用 String 承载 jsonb） |
+| `devknow-domain/src/main/java/com/devknow/domain/enums/ConversationEnums.java` | 新增，`ConversationStatus` / `MessageRole` |
+| `devknow-domain/src/main/java/com/devknow/domain/mapper/ConversationMapper.java` | 新增，列表（部分索引）/ touch / 软删 |
+| `devknow-domain/src/main/java/com/devknow/domain/mapper/ConversationMessageMapper.java` | 新增，手写 INSERT + `CAST AS jsonb`、`nextSeq`、过滤失败占位 |
+| `devknow-domain/src/main/java/com/devknow/domain/dto/AgentChatResult.java` | 新增，非流式返回会话 id 的包装（不让 Runner 认识会话） |
+| `devknow-domain/src/main/java/com/devknow/domain/dto/ConversationMessageView.java` | 新增，把 jsonb 文本解析成 `List<Citation>` |
+| `devknow-common/src/main/java/com/devknow/common/util/TokenEstimator.java` | 新增，token 估算收口到 common（原先有两份副本） |
+| `devknow-agent/src/main/java/com/devknow/agent/conversation/ConversationService.java` | 新增，会话读写 + 上下文裁剪 |
+| `devknow-agent/src/test/java/com/devknow/agent/conversation/ConversationServiceTest.java` | 新增，7 个裁剪边界用例，不连库 |
 
 **会话持久化修改（11）**
 
 | 文件 | 改动 |
 |---|---|
-| `devknow-agent/.../engine/AgentRunner.java` | 加 `history` 参数 + 第三步硬约束（历史不是知识来源）+ 第一步 `tool_choice: required` |
-| `devknow-agent/.../client/ChatClient.java` | `chat` / `streamChat` 加 `requireToolCall` |
-| `devknow-agent/.../client/ChatMessage.java` | 加 `assistant(content)` 工厂，用于回放历史 |
-| `devknow-agent/src/test/.../AgentRunnerTest.java` | 适配新签名，加 2 个历史拼装用例、2 个 `required` 用例（7 → 11） |
-| `devknow-web/.../controller/AgentController.java` | 会话编排 + `start` 事件 + 3 个管理接口 |
-| `devknow-web/.../config/GlobalExceptionHandler.java` | 兜客户端断开的 `IOException`，消掉 3 条 ERROR 堆栈 |
-| `devknow-common/.../api/ErrorCode.java` | 加 `CONVERSATION_NOT_FOUND(40004)` |
-| `devknow-domain/.../dto/AgentChatRequest.java` | 加 `conversationId`（可空 = 新建） |
-| `devknow-domain/src/test/.../SchemaEnumConsistencyTest.java` | 支持多迁移文件，加 2 个 V6 约束用例（4 → 6） |
-| `devknow-ingestion/.../chunker/HeadingChunker.java` | `estimateTokens` 改为委托 `TokenEstimator` |
-| `devknow-retrieval/.../embedding/SiliconFlowEmbeddingService.java` | 同上，消掉"两处必须同步修改"的副本 |
+| `devknow-agent/src/main/java/com/devknow/agent/engine/AgentRunner.java` | 加 `history` 参数 + 第三步硬约束（历史不是知识来源）+ 第一步 `tool_choice: required` |
+| `devknow-agent/src/main/java/com/devknow/agent/client/ChatClient.java` | `chat` / `streamChat` 加 `requireToolCall` |
+| `devknow-agent/src/main/java/com/devknow/agent/client/ChatMessage.java` | 加 `assistant(content)` 工厂，用于回放历史 |
+| `devknow-agent/src/test/java/com/devknow/agent/engine/AgentRunnerTest.java` | 适配新签名，加 2 个历史拼装用例、2 个 `required` 用例（7 → 11） |
+| `devknow-web/src/main/java/com/devknow/web/controller/AgentController.java` | 会话编排 + `start` 事件 + 3 个管理接口 |
+| `devknow-web/src/main/java/com/devknow/web/config/GlobalExceptionHandler.java` | 兜客户端断开的 `IOException`，消掉 3 条 ERROR 堆栈 |
+| `devknow-common/src/main/java/com/devknow/common/api/ErrorCode.java` | 加 `CONVERSATION_NOT_FOUND(40004)` |
+| `devknow-domain/src/main/java/com/devknow/domain/dto/AgentChatRequest.java` | 加 `conversationId`（可空 = 新建） |
+| `devknow-domain/src/test/java/com/devknow/domain/SchemaEnumConsistencyTest.java` | 支持多迁移文件，加 2 个 V6 约束用例（4 → 6） |
+| `devknow-ingestion/src/main/java/com/devknow/ingestion/chunker/HeadingChunker.java` | `estimateTokens` 改为委托 `TokenEstimator` |
+| `devknow-retrieval/src/main/java/com/devknow/retrieval/embedding/SiliconFlowEmbeddingService.java` | 同上，消掉"两处必须同步修改"的副本 |
