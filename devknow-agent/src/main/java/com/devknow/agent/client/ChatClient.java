@@ -72,11 +72,25 @@ public class ChatClient {
     public AssistantTurn chat(String model, double temperature,
                               List<ChatMessage> messages, List<Map<String, Object>> tools,
                               boolean requireToolCall) {
+        return chat(model, temperature, messages, tools, requireToolCall, null);
+    }
+
+    /**
+     * 同上，但可以限制输出长度。
+     *
+     * <p>只给"输出必须短且可控"的调用用（目前是上下文摘要压缩，300 字上限）。
+     * Agent 正常回答不传 —— 硬限输出会把长回答切断在半句话上。
+     *
+     * @param maxTokens 输出 token 上限；null 表示不限制
+     */
+    public AssistantTurn chat(String model, double temperature,
+                              List<ChatMessage> messages, List<Map<String, Object>> tools,
+                              boolean requireToolCall, Integer maxTokens) {
         requireConfigured();
 
-        Map<String, Object> body = buildBody(model, temperature, messages, tools, false, requireToolCall);
-        log.debug("调用模型: model={}, messages={} 条, tools={} 个",
-                model, messages.size(), tools == null ? 0 : tools.size());
+        Map<String, Object> body = buildBody(model, temperature, messages, tools, false, requireToolCall, maxTokens);
+        log.debug("调用模型: model={}, messages={} 条, tools={} 个, maxTokens={}",
+                model, messages.size(), tools == null ? 0 : tools.size(), maxTokens);
 
         HttpResponse<String> response;
         try {
@@ -115,7 +129,7 @@ public class ChatClient {
                                     Consumer<String> onDelta, boolean requireToolCall) {
         requireConfigured();
 
-        Map<String, Object> body = buildBody(model, temperature, messages, tools, true, requireToolCall);
+        Map<String, Object> body = buildBody(model, temperature, messages, tools, true, requireToolCall, null);
         log.debug("流式调用模型: model={}, messages={} 条, tools={} 个",
                 model, messages.size(), tools == null ? 0 : tools.size());
 
@@ -168,12 +182,16 @@ public class ChatClient {
 
     private Map<String, Object> buildBody(String model, double temperature,
                                           List<ChatMessage> messages, List<Map<String, Object>> tools,
-                                          boolean stream, boolean requireToolCall) {
+                                          boolean stream, boolean requireToolCall, Integer maxTokens) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model);
         body.put("messages", messages.stream().map(ChatMessage::toMap).toList());
         body.put("temperature", temperature);
         body.put("stream", stream);
+        // 只有明确需要"输出必须短"的调用才下发，否则长回答会被切在半句话上
+        if (maxTokens != null && maxTokens > 0) {
+            body.put("max_tokens", maxTokens);
+        }
         if (tools != null && !tools.isEmpty()) {
             body.put("tools", tools);
             // 显式 auto：部分模型在缺省 tool_choice 时不会主动调用工具。

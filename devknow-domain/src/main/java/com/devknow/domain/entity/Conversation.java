@@ -35,4 +35,20 @@ public class Conversation implements Serializable {
     private Instant createdAt;
 
     private Instant updatedAt;
+
+    /**
+     * 更早对话的滚动摘要（V7）。null 表示还没压过。
+     *
+     * <p>只覆盖"被上下文窗口丢掉的那一段"，与原文窗口永不重叠 ——
+     * 重叠会让模型对同一句话看到两遍，还可能自相矛盾。
+     */
+    private String summary;
+
+    /**
+     * 摘要已覆盖到的消息 seq（水位线），0 = 从未压缩。
+     *
+     * <p>它的唯一职责是<b>防止重复压缩</b>：每次只取 {@code seq > summaryUptoSeq}
+     * 的那一段，已经在摘要里的消息不会再被送进去。
+     */
+    private Integer summaryUptoSeq;
 }

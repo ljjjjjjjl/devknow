@@ -130,8 +130,8 @@ class ConversationServiceTest {
             c.setId(42L);
             return 1;
         });
-        ConversationService service =
-                new ConversationService(conversations, mock(ConversationMessageMapper.class));
+        ConversationService service = new ConversationService(conversations,
+                mock(ConversationMessageMapper.class), mock(ConversationSummarizer.class));
 
         assertThat(service.resolve(1L, null, "怎么配置数据源")).isEqualTo(42L);
     }
@@ -171,7 +171,8 @@ class ConversationServiceTest {
     private static ConversationService serviceWith(Conversation c) {
         ConversationMapper conversations = mock(ConversationMapper.class);
         when(conversations.selectById(c.getId())).thenReturn(c);
-        return new ConversationService(conversations, mock(ConversationMessageMapper.class));
+        return new ConversationService(conversations, mock(ConversationMessageMapper.class),
+                mock(ConversationSummarizer.class));
     }
 
     private static Conversation active(long id, long agentConfigId) {

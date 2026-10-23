@@ -130,6 +130,22 @@ devknow:
       # 生成式模型比 embedding 慢，超时放宽到 60 秒
       timeout-seconds: 60
       temperature: 0.20
+    summary:
+      # 第 8 周上下文摘要压缩：超出 4000 token 窗口的更早对话压成一段定长摘要。
+      # 关掉就退回"超出预算直接丢"的老行为。
+      enabled: ${SUMMARY_ENABLED:true}
+      # 留空 = 复用 agent.chat.model，不额外维护一个模型名
+      model:
+      # 摘要不该有发挥空间
+      temperature: 0.1
+      # 保险丝，不是长度约束：长度靠提示词里的"300 中文字"，
+      # 留到 400 是因为摘要会混进 @ConfigurationProperties 这类标识符，token 比纯中文高
+      max-tokens: 400
+      # 少于 4 条不值得付一次调用（一轮问答 = 2 条）
+      min-messages: 4
+      # 单批送进模型的 token 上限，超出就分批串行压
+      batch-token-limit: 2000
+      batch-max-messages: 20
 
 management:
   endpoints:

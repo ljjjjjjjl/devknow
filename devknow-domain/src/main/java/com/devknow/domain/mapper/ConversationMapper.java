@@ -50,4 +50,24 @@ public interface ConversationMapper extends BaseMapper<Conversation> {
             WHERE id = #{id} AND status = 'ACTIVE'
             """)
     int softDelete(@Param("id") Long id);
+
+    /**
+     * 写入滚动摘要并推进水位线（V7）。
+     *
+     * <p><b>为什么带 {@code AND summary_upto_seq = #{expectedUpto}}：</b>这是 CAS。
+     * 同一个会话若有两个请求同时触发压缩，只有水位仍然等于自己读到的那个值时才写得进去，
+     * 另一个影响 0 行、调用方据此丢弃本次结果。不加这个条件就会互相覆盖 ——
+     * 后写的那次是基于旧摘要算的，会把前一次刚合并进去的内容抹掉。
+     *
+     * @return 影响行数；0 表示水位已被别的请求推进，本次结果应丢弃
+     */
+    @Update("""
+            UPDATE conversation
+            SET summary = #{summary}, summary_upto_seq = #{uptoSeq}
+            WHERE id = #{id} AND summary_upto_seq = #{expectedUpto}
+            """)
+    int updateSummary(@Param("id") Long id,
+                      @Param("summary") String summary,
+                      @Param("uptoSeq") int uptoSeq,
+                      @Param("expectedUpto") int expectedUpto);
 }

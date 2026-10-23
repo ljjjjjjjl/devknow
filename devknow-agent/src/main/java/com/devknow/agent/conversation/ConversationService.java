@@ -17,6 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -42,6 +43,14 @@ public class ConversationService {
     /** 标题截断长度。列宽 200，留足余量。 */
     private static final int TITLE_MAX_CHARS = 60;
 
+    /**
+     * 注入 prompt 时摘要每一行（目标/已定/待续）的最大字符数。
+     *
+     * <p>三行各 110 ≈ 330 字，加上原来的 4000 token 窗口，总预算因此可预测：
+     * 摘要部分最多 330 token，不会出现"摘要一长就把原文窗口挤没"的连锁反应。
+     */
+    private static final int SUMMARY_LINE_CHARS = 110;
+
     /** 失败原因截断长度，与 {@code conversation_message.error} 的列宽一致。 */
     private static final int ERROR_MAX_CHARS = 500;
 
@@ -64,11 +73,14 @@ public class ConversationService {
 
     private final ConversationMapper conversationMapper;
     private final ConversationMessageMapper messageMapper;
+    private final ConversationSummarizer summarizer;
 
     public ConversationService(ConversationMapper conversationMapper,
-                               ConversationMessageMapper messageMapper) {
+                               ConversationMessageMapper messageMapper,
+                               ConversationSummarizer summarizer) {
         this.conversationMapper = conversationMapper;
         this.messageMapper = messageMapper;
+        this.summarizer = summarizer;
     }
 
     // ------------------------------------------------------------------
@@ -126,8 +138,27 @@ public class ConversationService {
     List<ChatMessage> loadContext(Long conversationId, int tokenBudget, int maxMessages) {
         List<ConversationMessage> history = messageMapper.listForContext(conversationId);
         List<ChatMessage> context = trim(history, tokenBudget, maxMessages);
-        log.debug("会话上下文: conversationId={}, 历史 {} 条 → 取 {} 条（预算 {} tokens / {} 条）",
-                conversationId, history.size(), context.size(), tokenBudget, maxMessages);
+
+        // 摘要只在"有内容被挤出窗口"时才有意义；它失败必须退回原样，所以整段兜住异常
+        String summary = null;
+        try {
+            summary = summarizer.maybeSummarize(conversationId, history, context.size());
+        } catch (RuntimeException e) {
+            log.warn("摘要压缩异常，按原样返回上下文: conversationId={}, {}", conversationId, e.toString());
+        }
+
+        if (summary != null && !summary.isBlank()) {
+            // 放在历史之前、system prompt 之后：模型先看到"这是背景，不是事实来源"
+            List<ChatMessage> withSummary = new ArrayList<>(context.size() + 1);
+            withSummary.add(ChatMessage.system(
+                    ConversationSummarizer.SUMMARY_PREFIX + SummaryText.clampByLines(summary, SUMMARY_LINE_CHARS)));
+            withSummary.addAll(context);
+            context = withSummary;
+        }
+
+        log.debug("会话上下文: conversationId={}, 历史 {} 条 → 取 {} 条（预算 {} tokens / {} 条，摘要 {} 字）",
+                conversationId, history.size(), context.size(), tokenBudget, maxMessages,
+                summary == null ? 0 : summary.length());
         return context;
     }
 
