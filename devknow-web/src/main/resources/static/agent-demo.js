@@ -245,9 +245,11 @@
     deltaLine = null;
     deltaCount = 0;
 
-    const card = createAnswerCard();
-    const state = { text: '', steps: 0, done: null };
+    // startedAt 必须早于 createAnswerCard：思考计时器的起点是"请求发出的那一刻"，
+    // 而卡片一建出来就开始走秒
     const startedAt = performance.now();
+    const card = createAnswerCard(startedAt);
+    const state = { text: '', steps: 0, done: null, startedAt, thinkingMs: null };
     controller = new AbortController();
 
     // 有会话就带上，让服务端恢复上下文；null 时整个字段不发，
@@ -291,6 +293,12 @@
     } finally {
       streaming = false;
       controller = null;
+      // 中断 / 报错时首字可能永远没来：计时器必须停，否则每失败一次就泄漏一个 interval，
+      // 而且那块"正在思考"会一直转下去
+      card.stopThink();
+      if (card.thinkMs === null) {
+        card.think.root.classList.add('gone');
+      }
       card.cursor.classList.add('hidden');
       toggleSending(false);
       appendLog('note', `前端计时 ${Math.round(performance.now() - startedAt)} ms`);
@@ -363,34 +371,53 @@
         // 会话 id 到手。第一轮之后每轮都带上它，追问才能接上上下文
         conversationId = data.conversationId;
         updateConv();
+        card.setStage('会话已就绪，正在规划检索…');
         break;
 
       case 'step':
         state.steps = data.step;
         setStepBadge(card, `第 ${data.step} 步`);
+        card.setStage(data.step <= 1
+          ? '第 1 步 · 正在决定检索策略…'
+          : `第 ${data.step} 步 · 正在整理答案…`);
         break;
 
       case 'delta':
+        // 首个 delta 就是"用户看到第一个字"的那一刻 —— 思考时间在这里定格。
+        // 之后的所有 delta 只更新正文，不再动计时
+        if (state.thinkingMs === null) {
+          state.thinkingMs = performance.now() - state.startedAt;
+          finishThink(card, state.thinkingMs);
+          card.cursor.classList.remove('hidden');
+          // 底部提示原本停在"正在执行 search_knowledge…"，首字都到了它就成了过期信息
+          setHint('');
+        }
         state.text += data.text;
-        // textContent 而不是 innerHTML：模型输出是不可信内容
+        // textContent 而不是 innerHTML：模型输出是不可信内容。
+        // 但它会连光标一起清掉，所以文本写完后要把光标重新挂到末尾，
+        // 这样生成过程中末尾一直有个闪烁的插入符（流式的"活着"的感觉全靠它）
         card.body.textContent = state.text;
+        card.body.appendChild(card.cursor);
         follow(stick);
         break;
 
       case 'tool':
         card.meta.appendChild(badge(`🔧 ${data.name}`, 'tool'));
+        card.setStage(`正在执行 ${data.name}…`);
         setHint(`正在执行 ${data.name}…`);
         break;
 
       case 'citation':
         // 引用渲染在右栏，不影响消息区高度，所以不用跟着滚
         addCitation(data);
+        card.setStage(`已命中 ${el.cites.childElementCount} 篇依据，正在组织回答…`);
         break;
 
       case 'done':
         state.done = data;
         // 步数徽章 setStepBadge 已经放了一个（"第 N 步"），这里不再重复加"2 步"
-        card.meta.appendChild(badge(`${data.elapsedMs} ms`));
+        // 生成总时长不面向用户：节点照样进 DOM，但 .t-total 把它渲染成完全透明
+        card.meta.appendChild(badge(`${data.elapsedMs} ms`)).classList.add('t-total');
         card.meta.appendChild(badge(`${(data.citations || []).length} 条引用`));
         card.meta.appendChild(badge(data.model));
         // 流式拼出来的文本与最终答案对不上时以后端为准，并在日志里留痕
@@ -399,7 +426,8 @@
           state.text = data.answer;
           card.body.textContent = data.answer;
         }
-        setStatus('ok', `完成 · ${data.elapsedMs} ms`);
+        finishThink(card, state.thinkingMs === null ? performance.now() - state.startedAt : state.thinkingMs);
+        setStatus('ok', '完成', ` · ${data.elapsedMs} ms`);
         setHint('');
         follow(stick);
         break;
@@ -416,6 +444,101 @@
     }
   }
 
+  // ---------------------------------------------------------------- 思考态
+
+  /** 秒数统一一位小数：否则 4 / 4.05 / 5.12 三种宽度会把后面的正文推来推去 */
+  function fmtSec(ms) {
+    return (ms / 1000).toFixed(1);
+  }
+
+  /**
+   * 造一块"首字之前"的占位。
+   *
+   * <p>存在的理由很实际：请求发出后到第一个字抵达之间要等 4~5 秒，
+   * 这段时间用户盯着的是一块空白，无法判断"发出去了"还是"卡住了"。
+   * 主流 agent（Claude / ChatGPT / DeepSeek）都在这一层给反馈，
+   * 差别只在文案走不到真实阶段 —— 这里用 SSE 的 start / step / tool / citation
+   * 驱动文案，所以显示的是<b>真实</b>进度，不是假的轮播。
+   */
+  function createThink(startedAt) {
+    const root = document.createElement('div');
+    root.className = 'think';
+
+    const head = document.createElement('div');
+    head.className = 'think-head';
+
+    const orb = document.createElement('span');
+    orb.className = 'think-orb';
+
+    const text = document.createElement('span');
+    text.className = 'think-text';
+    text.setAttribute('aria-live', 'polite');
+    text.textContent = '正在连接模型…';
+
+    const timer = document.createElement('span');
+    timer.className = 'think-timer';
+    timer.textContent = '0.0s';
+
+    head.append(orb, text, timer);
+
+    const bar = document.createElement('div');
+    bar.className = 'think-bar';
+    bar.appendChild(document.createElement('i'));
+
+    const skel = document.createElement('div');
+    skel.className = 'think-skeleton';
+    for (const w of ['88%', '96%', '62%']) {
+      const line = document.createElement('i');
+      line.style.width = w;
+      skel.appendChild(line);
+    }
+
+    root.append(head, bar, skel);
+
+    // 100ms 一跳：比 1s 更"在动"，又不会让主线程每帧重排
+    const tick = setInterval(() => {
+      timer.textContent = `${fmtSec(performance.now() - startedAt)}s`;
+    }, 100);
+
+    return {
+      root,
+      setStage(msg) {
+        if (msg) text.textContent = msg;
+      },
+      stop() {
+        clearInterval(tick);
+      },
+    };
+  }
+
+  /**
+   * 首个字到达：停表、折叠思考块、挂一个"已思考 x.x s"药丸。
+   *
+   * <p>折叠而不是删除 —— 药丸点一下能把它展开，复盘时想知道
+   * "这 4.6 秒里到底卡在哪一步"就有地方看。重复调用是安全的（幂等）。
+   */
+  function finishThink(card, ms) {
+    if (card.thinkMs !== null) {
+      return;
+    }
+    card.thinkMs = ms;
+    card.think.stop();
+    card.think.root.classList.add('gone');
+
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = 'badge think-pill';
+    pill.textContent = `已思考 ${fmtSec(ms)}s`;
+    pill.title = '从发出请求到第一个字抵达前端 · 点一下展开过程';
+    pill.addEventListener('click', () => {
+      card.think.root.classList.toggle('gone');
+      pill.classList.toggle('open');
+      updateJump();
+    });
+    card.meta.appendChild(pill);
+    card.thinkPill = pill;
+  }
+
   // ---------------------------------------------------------------- DOM
 
   function appendUserBubble(text) {
@@ -429,21 +552,26 @@
     scrollToBottom();
   }
 
-  function createAnswerCard() {
+  function createAnswerCard(startedAt) {
     const wrap = document.createElement('div');
     wrap.className = 'msg';
 
     const bubble = document.createElement('div');
     bubble.className = 'bubble answer';
 
+    // 思考块在前、正文在后：首字之前的视觉高度由它提供，
+    // 首字到达后它塌缩成 0 高，正文自然顶上来，不需要手动调布局
+    const think = createThink(startedAt);
+
     const body = document.createElement('div');
     body.className = 'answer-body';
 
+    // 光标一开始是隐藏的：思考阶段有旋转环和扫光条，再来个闪烁光标太吵
     const cursor = document.createElement('span');
-    cursor.className = 'cursor';
+    cursor.className = 'cursor hidden';
 
     body.appendChild(cursor);
-    bubble.appendChild(body);
+    bubble.append(think.root, body);
 
     const meta = document.createElement('div');
     meta.className = 'meta';
@@ -452,7 +580,12 @@
     el.messages.appendChild(wrap);
     scrollToBottom();
 
-    return { wrap, body, cursor, meta, stepBadge: null };
+    return {
+      wrap, body, cursor, meta, stepBadge: null,
+      think, thinkPill: null, thinkMs: null,
+      setStage: (msg) => think.setStage(msg),
+      stopThink: () => think.stop(),
+    };
   }
 
   function setStepBadge(card, text) {
@@ -531,12 +664,25 @@
     el.hint.textContent = text;
   }
 
-  function setStatus(kind, text) {
+  /**
+   * 顶栏状态。
+   *
+   * @param masked 附在文字后面的"看不见的部分"（生成总时长）。
+   *   仍然写进 DOM 是为了可调试、可复制，但由 CSS 渲染成全透明 ——
+   *   产品上不想让用户盯着总耗时，那份数据留在右栏原始事件流里就够。
+   */
+  function setStatus(kind, text, masked) {
     el.status.className = kind === 'busy' ? 'status busy'
       : kind === 'ok' ? 'status ok'
       : kind === 'err' ? 'status err'
       : 'status';
     el.statusText.textContent = text;
+    if (masked) {
+      const span = document.createElement('span');
+      span.className = 't-total';
+      span.textContent = masked;
+      el.statusText.appendChild(span);
+    }
   }
 
   // ---------------------------------------------------------------- 启动

@@ -431,6 +431,165 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
 .log .e-done { color: var(--done); }
 .log .e-error { color: var(--err); }
 
+/* ---------- 首字之前的"思考中"态 ----------
+
+   这一块解决的是体感问题：请求发出后要等 4~5 秒才有第一个字，
+   期间若是一块空白，用户分不清"在算"还是"死了"。
+   文案由 SSE 的真实事件驱动（start / step / tool / citation），
+   所以是本项目真实的阶段，而不是定时轮播的假进度。 */
+
+.think {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  overflow: hidden;
+  max-height: 200px;
+  opacity: 1;
+  transition: max-height .32s ease, opacity .2s ease, padding .32s ease;
+}
+
+/* 折叠态：高度归零，正文自然顶上来。
+   transition 而不是 display:none —— 直接消失像"内容被删了"，
+   塌缩才读得出"思考结束了" */
+.think.gone {
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.think-head { display: flex; align-items: center; gap: 9px; min-width: 0; }
+
+/* 锥形渐变的旋转环。选它而不是"三个跳动的点"，因为环更像"在算"，
+   而点更像"在等"；而且纯 CSS 驱动，主线程被 delta 刷爆时也不掉帧 */
+.think-orb {
+  position: relative;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0deg, var(--accent) 130deg, var(--cite) 250deg, transparent 360deg);
+  animation: orb-spin 1.1s linear infinite;
+}
+
+/* 挖空中心做成环：直接用 border 做不出渐变 */
+.think-orb::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--panel-2);
+}
+
+@keyframes orb-spin { to { transform: rotate(360deg); } }
+
+/* 阶段文字走一遍渐变扫光：既表示"还在动"，亮度又压在正文之下，不抢注意力 */
+.think-text {
+  font-size: 12.5px;
+  background: linear-gradient(90deg, var(--dim) 0%, var(--text) 40%, var(--dim) 82%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: text-sweep 2.6s linear infinite;
+}
+
+@keyframes text-sweep {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+/* 等宽 + tabular-nums：数字逐位跳动时宽度不变，否则右手边的正文会被推来推去 */
+.think-timer {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+  opacity: .85;
+}
+
+/* 不定长进度条：不表示百分比（这里没有可信的分母），只表示"在推进" */
+.think-bar {
+  position: relative;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(42, 50, 61, .75);
+  overflow: hidden;
+}
+
+.think-bar i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 38%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), var(--cite), transparent);
+  animation: bar-slide 1.5s ease-in-out infinite;
+}
+
+@keyframes bar-slide {
+  from { left: -40%; }
+  to { left: 100%; }
+}
+
+/* 骨架条：提前占住"这段会有正文"的位置，首字到达时不会整块跳一下 */
+.think-skeleton { display: flex; flex-direction: column; gap: 7px; }
+
+.think-skeleton i {
+  display: block;
+  height: 7px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #2b3644 25%, #3e4d60 37%, #2b3644 63%);
+  background-size: 400% 100%;
+  animation: skel-sweep 1.7s ease-in-out infinite;
+}
+
+.think-skeleton i:nth-child(2) { animation-delay: .18s; }
+.think-skeleton i:nth-child(3) { animation-delay: .36s; }
+
+@keyframes skel-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+/* 思考结束后留下的药丸：这是用户唯一能看到的"等了多久"，
+   而且它算的是"请求发出 → 第一个字"，不是生成总时长 */
+.badge.think-pill {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--cite);
+  border-color: rgba(163, 113, 247, .38);
+  background: rgba(163, 113, 247, .12);
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+
+.badge.think-pill::before { content: '◷ '; }
+.badge.think-pill.open::before { content: '◴ '; }
+
+.badge.think-pill:hover {
+  border-color: var(--cite);
+  box-shadow: 0 3px 12px -6px var(--cite);
+}
+
+/* 生成总时长：DOM 里留着（可调试、可复制），但渲染上彻底不可见。
+   用绝对定位 + opacity:0 而不是只把文字刷成透明 —— 只刷颜色的话，
+   那个药丸仍然占着版面，会在"已思考"和"5 条引用"之间留一道说不清的空隙 */
+.t-total {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* ---------- 窄屏 / 矮窗口回退 ---------- */
 
 @media (max-width: 900px) {
