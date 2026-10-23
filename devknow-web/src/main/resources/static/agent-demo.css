@@ -604,6 +604,26 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
   display: flex;
   flex-direction: column;
   gap: 3px;
+  /* 隐藏滚动条：45 条会话时它常驻在右边缘，比列表本身还显眼。
+     滚动能力保留（滚轮、触摸板、方向键照常），只是不再画那条轨道 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.convs::-webkit-scrollbar { width: 0; height: 0; }
+
+/* 上下边缘淡出，代替滚动条给"上面/下面还有"的提示 */
+.convs-panel { position: relative; }
+.convs-panel::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 18px;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(rgba(22, 27, 34, 0), var(--panel));
 }
 
 .convs:empty::before {
@@ -618,18 +638,28 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
   position: relative;
   padding: 7px 26px 7px 9px;
   border: 1px solid transparent;
+  /* 左边预留一道色条：hover / 选中时点亮，比整块背景变化更好认 */
+  border-left: 2px solid transparent;
   border-radius: 8px;
   color: var(--text);
   cursor: pointer;
   transition: background .15s, border-color .15s;
 }
 
-.conv-item:hover { background: var(--panel-2); border-color: var(--line); }
+/* hover 要能一眼看出来：底色 + 边框 + 左色条 + 标题提亮，四件事一起做 */
+.conv-item:hover {
+  background: rgba(76, 141, 255, .10);
+  border-color: rgba(76, 141, 255, .30);
+  border-left-color: var(--accent);
+}
 
-/* 当前会话：蓝边框 + 淡底，跟右侧"会话 #90"药丸是同一个语义 */
+.conv-item:hover .t { color: #fff; }
+
+/* 当前会话：比 hover 更实一档，两者不能长得一样 */
 .conv-item.active {
-  background: rgba(76, 141, 255, .13);
-  border-color: rgba(76, 141, 255, .45);
+  background: rgba(76, 141, 255, .17);
+  border-color: rgba(76, 141, 255, .55);
+  border-left-color: var(--done);
 }
 
 .conv-item .t {
@@ -674,6 +704,32 @@ button.ghost.small { padding: 3px 9px; font-size: 11.5px; }
 .conv-item.active .conv-del { opacity: 1; }
 
 .conv-del:hover { color: var(--err); background: rgba(248, 81, 73, .16); }
+
+/* 默认只渲染最近 20 条。45 条全铺出来一屏都是标题，反而找不到想翻的那条。
+   按钮吸在列表底部：20 条本来就超出一屏，跟在最后面等于要用户先滚到底才看得见它 */
+.conv-more {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--dim);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  text-align: center;
+  transition: color .15s, border-color .15s, background .15s;
+  box-shadow: 0 -10px 16px -10px rgba(0, 0, 0, .6);
+}
+
+.conv-more:hover {
+  color: var(--accent);
+  border-color: rgba(76, 141, 255, .5);
+  background: rgba(76, 141, 255, .07);
+}
 
 /* 历史消息里的失败 / 空回答：用弱化的斜体说明，不要渲染成正常正文，
    否则用户会以为这就是模型当时的回答 */

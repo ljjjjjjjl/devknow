@@ -250,6 +250,13 @@
    */
   const URL_PARAM = 'c';
 
+  /** 首屏渲染多少条会话；点"显示更早的"每次再加这么多 */
+  const CONV_PAGE = 20;
+
+  /** 最近一次拉到的完整列表，以及当前已展开的条数（纯前端分片，不是分页查询） */
+  let convAll = [];
+  let convShown = CONV_PAGE;
+
   function currentConfigId() {
     return Number(el.configId.value) || 1;
   }
@@ -291,14 +298,23 @@
       setHint(`会话列表加载失败：${e.message}`);
       return;
     }
-    renderConversations(Array.isArray(list) ? list : []);
+    convAll = Array.isArray(list) ? list : [];
+    renderConversations();
   }
 
-  function renderConversations(list) {
-    el.convs.textContent = '';
-    el.convCount.textContent = String(list.length);
+  function renderConversations() {
+    // 当前会话如果排在分页之外（点了很早以前的一条），先把它所在的那一页展开再画
+    if (conversationId !== null) {
+      const idx = convAll.findIndex((c) => c.id === conversationId);
+      if (idx >= convShown) {
+        convShown = Math.ceil((idx + 1) / CONV_PAGE) * CONV_PAGE;
+      }
+    }
 
-    for (const c of list) {
+    el.convs.textContent = '';
+    el.convCount.textContent = String(convAll.length);
+
+    for (const c of convAll.slice(0, convShown)) {
       const item = document.createElement('div');
       item.className = 'conv-item' + (c.id === conversationId ? ' active' : '');
       item.dataset.id = String(c.id);
@@ -325,6 +341,19 @@
 
       item.append(title, meta, del);
       el.convs.appendChild(item);
+    }
+
+    const rest = convAll.length - Math.min(convShown, convAll.length);
+    if (rest > 0) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'conv-more';
+      more.textContent = `还有 ${rest} 条 · 显示更早的`;
+      more.addEventListener('click', () => {
+        convShown += CONV_PAGE;
+        renderConversations();
+      });
+      el.convs.appendChild(more);
     }
   }
 
@@ -950,7 +979,10 @@
   renderSamples();
   updateConv();
 
-  el.convRefresh.addEventListener('click', loadConversations);
+  el.convRefresh.addEventListener('click', () => {
+    convShown = CONV_PAGE;      // 手动刷新顺手收起，回到最近一页
+    loadConversations();
+  });
 
   // 换 agentConfigId 相当于换一套智能体，会话列表要跟着换
   el.configId.addEventListener('change', () => {
@@ -961,6 +993,7 @@
     updateConv();
     syncUrl(null);
     setActiveConv(null);
+    convShown = CONV_PAGE;
     loadConversations();
   });
 
